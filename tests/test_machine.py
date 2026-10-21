@@ -151,3 +151,52 @@ def test_advance_clean_leaves_nonempty_folder(db_path, tmp_path):
 
     assert movie_folder.exists()  # not deleted -- not actually empty
     assert _get_job(db_path, job_id)["state"] == "DONE"
+
+
+def test_advance_copy_dry_run_performs_no_action(db_path, tmp_path):
+    app_id = _insert_app(db_path)
+    source = tmp_path / "staging" / "movie.mkv"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"data")
+    target = tmp_path / "target" / "movie.mkv"
+    job_id = _insert_job(db_path, app_id, source_path=source, target_path=target)
+
+    with session(db_path) as conn:
+        job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        advance_copy(conn, job, sidecar_extensions=["srt"], verify_mode="size", dry_run=True)
+
+    assert not target.exists()  # no file ever written to the destination
+    assert _get_job(db_path, job_id)["state"] == "IMPORTED"  # state untouched
+
+
+def test_advance_reconcile_dry_run_performs_no_action(db_path, tmp_path):
+    app_id = _insert_app(db_path)
+    job_id = _insert_job(
+        db_path, app_id, source_path=tmp_path / "a", target_path=tmp_path / "b", state="PUBLISHED"
+    )
+    arr = FakeArrApp()
+
+    with session(db_path) as conn:
+        job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        advance_reconcile(conn, job, arr, dry_run=True)
+
+    assert arr.deleted_files == []
+    assert arr.unmonitored == []
+    assert _get_job(db_path, job_id)["state"] == "PUBLISHED"
+
+
+def test_advance_clean_dry_run_leaves_folder_and_state(db_path, tmp_path):
+    app_id = _insert_app(db_path)
+    movie_folder = tmp_path / "staging" / "Movie2024"
+    movie_folder.mkdir(parents=True)  # already empty, WOULD be pruned for real
+    source = movie_folder / "movie.mkv"
+    job_id = _insert_job(
+        db_path, app_id, source_path=source, target_path=tmp_path / "t", state="RECONCILED"
+    )
+
+    with session(db_path) as conn:
+        job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        advance_clean(conn, job, dry_run=True)
+
+    assert movie_folder.exists()
+    assert _get_job(db_path, job_id)["state"] == "RECONCILED"

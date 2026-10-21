@@ -26,6 +26,7 @@ def run_app_tick(
     download_client: DownloadClient | None,
     sidecar_extensions: list[str],
     verify_mode: str,
+    dry_run: bool = False,
 ) -> None:
     """One app's worth of a scheduler tick: seal (Section 4 phase A), then
     advance every job one step (Section 5). Kept separate from `_tick` below
@@ -34,7 +35,11 @@ def run_app_tick(
     """
     if download_client is not None:
         seal_completed_downloads(
-            conn, app_id=app["id"], arr_client=arr_client, download_client=download_client
+            conn,
+            app_id=app["id"],
+            arr_client=arr_client,
+            download_client=download_client,
+            dry_run=dry_run,
         )
     run_once(
         conn,
@@ -43,6 +48,7 @@ def run_app_tick(
         download_client=download_client,
         sidecar_extensions=sidecar_extensions,
         verify_mode=verify_mode,
+        dry_run=dry_run,
     )
 
 
@@ -68,6 +74,7 @@ def _tick(db_path: Path) -> None:
         ext.strip() for ext in settings_rows.get("sidecar_extensions", "srt").split(",") if ext.strip()
     ]
     verify_mode = settings_rows.get("verify_mode", "size")
+    dry_run = settings_rows.get("dry_run", "true") == "true"
 
     for app in apps:
         arr_client = arr.make_app(app["kind"], app["base_url"], app["api_key"])
@@ -90,6 +97,7 @@ def _tick(db_path: Path) -> None:
                     download_client=download_client,
                     sidecar_extensions=sidecar_extensions,
                     verify_mode=verify_mode,
+                    dry_run=dry_run,
                 )
         except Exception:  # noqa: BLE001 -- one app's failure must not stop the others
             logger.exception("scheduler tick failed for app %r", app["name"])

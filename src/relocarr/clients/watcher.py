@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 
 from ..arr.base import ArrApp
 from .base import DownloadClient
+
+logger = logging.getLogger(__name__)
 
 
 def seal_completed_downloads(
@@ -12,6 +15,7 @@ def seal_completed_downloads(
     app_id: int,
     arr_client: ArrApp,
     download_client: DownloadClient,
+    dry_run: bool = False,
 ) -> list[str]:
     """PLAN.md Section 4/5: the SEALED step, phase A of the two-phase
     design -- stop a torrent the moment it's complete, before the *arr has
@@ -44,6 +48,10 @@ def seal_completed_downloads(
             (app_id, torrent.hash),
         ).fetchone()
         if already_sealed:
+            continue
+
+        if dry_run:
+            logger.info("[DRY RUN] would stop torrent %s (%s)", torrent.id, torrent.name)
             continue
 
         download_client.stop(torrent.id)

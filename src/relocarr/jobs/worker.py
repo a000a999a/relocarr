@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import datetime, timezone
 
@@ -7,6 +8,8 @@ from ..arr.base import ArrApp
 from ..clients.base import DownloadClient
 from .gate import removal_gate_open
 from .machine import advance_clean, advance_copy, advance_reconcile
+
+logger = logging.getLogger(__name__)
 
 
 def run_once(
@@ -18,6 +21,7 @@ def run_once(
     sidecar_extensions: list[str],
     verify_mode: str,
     settle_window_seconds: float = 30.0,
+    dry_run: bool = False,
 ) -> None:
     """One orchestration pass over this app's jobs: advances every eligible
     job exactly one step. Does not loop internally -- a scheduled background
@@ -27,12 +31,14 @@ def run_once(
     for job in conn.execute(
         "SELECT * FROM jobs WHERE app_id = ? AND state IN ('IMPORTED', 'COPYING')", (app_id,)
     ).fetchall():
-        advance_copy(conn, job, sidecar_extensions=sidecar_extensions, verify_mode=verify_mode)
+        advance_copy(
+            conn, job, sidecar_extensions=sidecar_extensions, verify_mode=verify_mode, dry_run=dry_run
+        )
 
     for job in conn.execute(
         "SELECT * FROM jobs WHERE app_id = ? AND state = 'PUBLISHED'", (app_id,)
     ).fetchall():
-        advance_reconcile(conn, job, arr_client)
+        advance_reconcile(conn, job, arr_client, dry_run=dry_run)
 
     _advance_removal_gate(
         conn,
@@ -40,6 +46,7 @@ def run_once(
         arr_client=arr_client,
         download_client=download_client,
         settle_window_seconds=settle_window_seconds,
+        dry_run=dry_run,
     )
 
 
@@ -50,6 +57,7 @@ def _advance_removal_gate(
     arr_client: ArrApp,
     download_client: DownloadClient | None,
     settle_window_seconds: float,
+    dry_run: bool = False,
 ) -> None:
     # No downloadId (manual imports, spike 2 finding) -> no torrent to
     # correlate against or remove; skip the gate entirely.
@@ -57,7 +65,7 @@ def _advance_removal_gate(
         "SELECT * FROM jobs WHERE app_id = ? AND state = 'RECONCILED' AND download_id IS NULL",
         (app_id,),
     ).fetchall():
-        advance_clean(conn, job)
+        advance_clean(conn, job, dry_run=dry_run)
 
     if download_client is None:
         return
@@ -95,11 +103,14 @@ def _advance_removal_gate(
 
         torrent = torrents_by_hash.get(download_id.lower())
         if torrent is not None:
-            download_client.remove(torrent.id, delete_data=True)
+            if dry_run:
+                logger.info("[DRY RUN] would remove torrent %s (%s)", torrent.id, torrent.name)
+            else:
+                download_client.remove(torrent.id, delete_data=True)
 
         for job in siblings:
             if job["state"] == "RECONCILED":
-                advance_clean(conn, job)
+                advance_clean(conn, job, dry_run=dry_run)
 
 
 def _seconds_since(iso_timestamp: str) -> float:

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 
 from ..arr.base import ArrApp
 from ..transfer.copier import rsync_copy, verify
 from ..transfer.layout import sidecar_paths
+
+logger = logging.getLogger(__name__)
 
 
 def _set_state(conn: sqlite3.Connection, job_id: int, state: str, error: str | None = None) -> None:
@@ -21,13 +24,32 @@ def _set_state(conn: sqlite3.Connection, job_id: int, state: str, error: str | N
     conn.commit()
 
 
-def advance_copy(conn: sqlite3.Connection, job: sqlite3.Row, *, sidecar_extensions: list[str], verify_mode: str) -> None:
+def advance_copy(
+    conn: sqlite3.Connection,
+    job: sqlite3.Row,
+    *,
+    sidecar_extensions: list[str],
+    verify_mode: str,
+    dry_run: bool = False,
+) -> None:
     """IMPORTED/COPYING -> VERIFIED -> PUBLISHED, or NEEDS_ATTENTION on a
     permanent failure. A transient failure leaves the job in COPYING for the
     worker to retry later -- rsync's --partial means the retry resumes.
+
+    dry_run (Section 12: "logs every action it would take and performs
+    none"): logs what would happen and returns immediately -- no rsync
+    call, no state change, so the job stays exactly where it is for the
+    next tick to evaluate again. This is deliberately NOT the same as
+    actually running the step and discarding the result; a real rsync
+    attempt could still touch the destination (create its temp file) even
+    on failure, which dry-run must never risk.
     """
     source = Path(job["source_path"])
     target = Path(job["target_path"])
+
+    if dry_run:
+        logger.info("[DRY RUN] would copy %s -> %s", source, target)
+        return
 
     _set_state(conn, job["id"], "COPYING")
     result = rsync_copy(source, target)
@@ -55,11 +77,21 @@ def advance_copy(conn: sqlite3.Connection, job: sqlite3.Row, *, sidecar_extensio
     # TODO notify/plex.py: notify the media server here once built.
 
 
-def advance_reconcile(conn: sqlite3.Connection, job: sqlite3.Row, arr_client: ArrApp) -> None:
+def advance_reconcile(
+    conn: sqlite3.Connection, job: sqlite3.Row, arr_client: ArrApp, *, dry_run: bool = False
+) -> None:
     """PUBLISHED -> RECONCILED: delete the file through the *arr's own API
     (so its database stays consistent) and unmonitor so it's never
     re-downloaded. PLAN.md Section 5/6.
     """
+    if dry_run:
+        logger.info(
+            "[DRY RUN] would delete_file(%s) and unmonitor(%s)",
+            job["media_file_id"],
+            job["unmonitor_id"],
+        )
+        return
+
     try:
         arr_client.delete_file(job["media_file_id"])
         arr_client.unmonitor(job["unmonitor_id"])
@@ -69,11 +101,15 @@ def advance_reconcile(conn: sqlite3.Connection, job: sqlite3.Row, arr_client: Ar
     _set_state(conn, job["id"], "RECONCILED")
 
 
-def advance_clean(conn: sqlite3.Connection, job: sqlite3.Row) -> None:
+def advance_clean(conn: sqlite3.Connection, job: sqlite3.Row, *, dry_run: bool = False) -> None:
     """RECONCILED -> CLEANED: prune the now-empty per-movie/episode staging
     folder. Confirmed via spike 8 (2026-10-21) that no *arr setting does
     this -- it's entirely relocarr's own responsibility.
     """
+    if dry_run:
+        logger.info("[DRY RUN] would prune %s if empty", Path(job["source_path"]).parent)
+        return
+
     folder = Path(job["source_path"]).parent
     try:
         if folder.exists() and not any(folder.iterdir()):

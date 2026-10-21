@@ -90,6 +90,27 @@ def test_does_not_reseal_an_already_sealed_download(db_path):
     assert dc.stopped == [9]
 
 
+def test_dry_run_does_not_stop_or_record_sealed(db_path):
+    app_id = _insert_app(db_path)
+    arr = FakeArrApp(queue=[QueueEntry("hash1", "downloading", "ok")])
+    dc = FakeDownloadClient(
+        torrents=[Torrent(id=9, name="Movie", hash="HASH1", percent_done=1.0, status=6, download_dir="/d")]
+    )
+
+    with session(db_path) as conn:
+        sealed = seal_completed_downloads(
+            conn, app_id=app_id, arr_client=arr, download_client=dc, dry_run=True
+        )
+
+    assert sealed == []
+    assert dc.stopped == []
+    with session(db_path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM downloads WHERE app_id = ? AND download_id = 'HASH1' COLLATE NOCASE", (app_id,)
+        ).fetchone()
+    assert row is None
+
+
 def test_hash_matching_is_case_insensitive(db_path):
     # spike 4 (2026-10-21): Transmission's hash is lowercase, the *arr's
     # queue downloadId is uppercase, for the same torrent.

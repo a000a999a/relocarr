@@ -24,6 +24,22 @@ def _insert_app(db_path) -> object:
         return conn.execute("SELECT * FROM apps").fetchone()
 
 
+def _insert_job(db_path, app_id, *, media_file_id, source_path, target_path, download_id=None) -> int:
+    size = source_path.stat().st_size if source_path.exists() else 0
+    with session(db_path) as conn:
+        cur = conn.execute(
+            """INSERT INTO jobs (app_id, download_id, media_file_id, unmonitor_id, source_path, target_path, size_bytes, state)
+               VALUES (?, ?, ?, 1, ?, ?, ?, 'IMPORTED')""",
+            (app_id, download_id, media_file_id, str(source_path), str(target_path), size),
+        )
+        return cur.lastrowid
+
+
+def _state(db_path, job_id):
+    with session(db_path) as conn:
+        return conn.execute("SELECT state FROM jobs WHERE id = ?", (job_id,)).fetchone()["state"]
+
+
 def test_run_app_tick_seals_then_advances_jobs_in_one_call(db_path, tmp_path):
     app = _insert_app(db_path)
 
@@ -107,6 +123,28 @@ def test_run_app_tick_works_with_no_download_client(db_path, tmp_path):
     with session(db_path) as conn:
         job_state = conn.execute("SELECT state FROM jobs WHERE app_id = ?", (app["id"],)).fetchone()["state"]
     assert job_state == "DONE"
+
+
+def test_run_app_tick_dry_run_performs_no_real_action(db_path, tmp_path):
+    app = _insert_app(db_path)
+    source = tmp_path / "staging" / "Movie2024" / "movie.mkv"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"data")
+    target = tmp_path / "target" / "movie.mkv"
+    job_id = _insert_job(db_path, app["id"], media_file_id="f1", source_path=source, target_path=target)
+
+    arr_client = FakeArrApp(file_paths={"f1": source})
+
+    with session(db_path) as conn:
+        run_app_tick(
+            conn, app, arr_client=arr_client, download_client=None,
+            sidecar_extensions=["srt"], verify_mode="size", dry_run=True,
+        )
+
+    assert not target.exists()  # nothing was actually copied
+    assert source.exists()  # nothing was actually deleted
+    assert arr_client.deleted_files == []
+    assert _state(db_path, job_id) == "IMPORTED"  # untouched -- dry-run logs, never mutates
 
 
 def test_poll_interval_reads_from_settings(db_path):
