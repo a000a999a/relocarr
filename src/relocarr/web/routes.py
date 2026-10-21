@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 
 from .. import arr
 from ..arr.payloads import parse_radarr_webhook, parse_sonarr_webhook
+from ..arr.preflight import evaluate_preflight
 from ..config import settings
 from ..db import session
 from ..transfer.layout import compute_target_path
@@ -168,6 +169,38 @@ def add_download_client(
             ),
         )
     return RedirectResponse(f"/apps/{app_id}", status_code=303)
+
+
+@router.get("/apps/{app_id}/preflight")
+def app_preflight(request: Request, app_id: int):
+    """Section 10's preflight page: live checklist of the *arr's settings."""
+    with session(settings.db_path) as conn:
+        app = conn.execute("SELECT * FROM apps WHERE id = ?", (app_id,)).fetchone()
+        if app is None:
+            raise HTTPException(404, "unknown app")
+        sidecar_row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'sidecar_extensions'"
+        ).fetchone()
+        sidecar_extensions = [
+            e.strip() for e in (sidecar_row["value"] if sidecar_row else "srt").split(",") if e.strip()
+        ]
+
+    client = arr.make_app(app["kind"], app["base_url"], app["api_key"])
+    try:
+        data = client.get_preflight_data()
+    except Exception as exc:  # noqa: BLE001 -- surface as a page-level error, not a 500
+        return templates.TemplateResponse(
+            request, "preflight.html", {"app": app, "checks": None, "fetch_error": str(exc)}
+        )
+    finally:
+        client.close()
+
+    checks = evaluate_preflight(
+        data, staging_root=app["staging_root"], sidecar_extensions=sidecar_extensions
+    )
+    return templates.TemplateResponse(
+        request, "preflight.html", {"app": app, "checks": checks, "fetch_error": None}
+    )
 
 
 @router.post("/webhook/{app_id}")

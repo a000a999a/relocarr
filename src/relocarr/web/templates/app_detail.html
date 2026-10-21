@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block title %} - {{ app.name }}{% endblock %}
 {% block content %}
-<h1>{{ app.name }} <span style="color: var(--text-dim); font-weight: 400; font-size: 14px;">({{ app.kind }})</span></h1>
+<h1>{{ app.name }} <span style="color: var(--text-dim); font-weight: 400; font-size: 14px;">({{ app.kind }})</span>
+  <a href="/apps/{{ app.id }}/preflight" style="font-size: 13px; color: var(--accent); margin-left: 12px;">Preflight &rarr;</a>
+</h1>
 
 <div class="card">
   <label>Staging folder (set when added, from the *arr's root folders)</label>

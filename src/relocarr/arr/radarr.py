@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import httpx
 
-from .base import ConnectionTestResult, QueueEntry, RootFolder
+from .base import (
+    ConnectionTestResult,
+    DownloadClientSettings,
+    NotificationSettings,
+    PreflightData,
+    QueueEntry,
+    RootFolder,
+)
 
 
 class RadarrApp:
@@ -58,6 +65,71 @@ class RadarrApp:
             for r in resp.json()["records"]
             if "downloadId" in r
         ]
+
+    def get_preflight_data(self) -> PreflightData:
+        """Section 10's Radarr prerequisite checklist, read from the same
+        endpoints and fields confirmed live during tonight's manual
+        migration walkthrough (2026-10-21): /config/downloadclient
+        (enableCompletedDownloadHandling), /downloadclient
+        (removeCompletedDownloads per client), /config/mediamanagement
+        (recycleBin, copyUsingHardlinks, importExtraFiles,
+        extraFileExtensions), /config/naming (renameMovies), /notification
+        (per-connection trigger booleans -- implementation "PlexServer" for
+        the Plex case checked here).
+        """
+        dc_config = self._client.get("/api/v3/config/downloadclient")
+        dc_config.raise_for_status()
+
+        clients = self._client.get("/api/v3/downloadclient")
+        clients.raise_for_status()
+
+        media_mgmt = self._client.get("/api/v3/config/mediamanagement")
+        media_mgmt.raise_for_status()
+
+        naming = self._client.get("/api/v3/config/naming")
+        naming.raise_for_status()
+
+        notifications = self._client.get("/api/v3/notification")
+        notifications.raise_for_status()
+
+        mm = media_mgmt.json()
+        notif_list = notifications.json()
+
+        return PreflightData(
+            root_folders=self.list_root_folders(),
+            completed_download_handling_enabled=dc_config.json()["enableCompletedDownloadHandling"],
+            download_clients=[
+                DownloadClientSettings(
+                    name=c["name"], remove_completed_downloads=c["removeCompletedDownloads"]
+                )
+                for c in clients.json()
+            ],
+            recycle_bin=mm["recycleBin"],
+            use_hardlinks=mm["copyUsingHardlinks"],
+            rename_enabled=naming.json()["renameMovies"],
+            import_extra_files=mm["importExtraFiles"],
+            extra_file_extensions=[e.strip() for e in mm["extraFileExtensions"].split(",") if e.strip()],
+            notifications=[
+                NotificationSettings(
+                    name=n["name"],
+                    implementation=n["implementation"],
+                    any_trigger_enabled=any(
+                        n.get(k, False)
+                        for k in (
+                            "onDownload",
+                            "onUpgrade",
+                            "onImportComplete",
+                            "onRename",
+                            "onMovieAdded",
+                            "onMovieDelete",
+                            "onMovieFileDelete",
+                        )
+                    ),
+                )
+                for n in notif_list
+            ],
+            webhook_configured=any(n["implementation"] == "Webhook" for n in notif_list),
+        )
 
     def close(self) -> None:
         self._client.close()

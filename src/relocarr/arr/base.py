@@ -24,12 +24,49 @@ class QueueEntry:
     tracked_download_status: str
 
 
+@dataclass
+class DownloadClientSettings:
+    name: str
+    remove_completed_downloads: bool
+
+
+@dataclass
+class NotificationSettings:
+    name: str
+    implementation: str
+    any_trigger_enabled: bool
+
+
+@dataclass
+class PreflightData:
+    """Raw settings the Section 10 preflight checklist is evaluated
+    against. One real API call per field, all confirmed live against
+    Radarr 6.4.4 / Sonarr during this session's manual walkthrough and
+    spike testing -- see arr/preflight.py for how these map to checks.
+    """
+
+    root_folders: list[RootFolder]
+    completed_download_handling_enabled: bool
+    download_clients: list[DownloadClientSettings]
+    recycle_bin: str
+    use_hardlinks: bool
+    rename_enabled: bool
+    import_extra_files: bool
+    extra_file_extensions: list[str]
+    notifications: list[NotificationSettings]
+    webhook_configured: bool
+
+
 class ArrApp(Protocol):
     """Interface implemented by arr/radarr.py and arr/sonarr.py."""
 
     def test_connection(self) -> ConnectionTestResult: ...
 
     def list_root_folders(self) -> list[RootFolder]: ...
+
+    def get_preflight_data(self) -> PreflightData:
+        """Section 10: the raw settings the preflight page checks."""
+        ...
 
     def delete_file(self, file_id: str) -> None:
         """DELETE the tracked media file. PLAN.md Section 5, RECONCILED."""

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Preflight -- {{ app.name }}</h1>
+
+{% if fetch_error %}
+<div class="card">
+  <div class="error">Could not reach {{ app.kind | capitalize }}: {{ fetch_error }}</div>
+</div>
+{% else %}
+<table>
+  <tr><th>Check</th><th>Status</th><th>Detail</th></tr>
+  {% for check in checks %}
+  <tr>
+    <td>{{ check.name }}</td>
+    <td>
+      {% if check.status == 'pass' %}
+        <span class="badge" style="background: #2e7d32;">PASS</span>
+      {% elif check.status == 'warn' %}
+        <span class="badge" style="background: #b8860b;">WARN</span>
+      {% else %}
+        <span class="badge" style="background: var(--btn-danger);">FAIL</span>
+      {% endif %}
+    </td>
+    <td style="font-size: 13px;">{{ check.message }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+{% endblock %}
