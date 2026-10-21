@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block nav_settings %}active{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<form method="post" action="/settings">
+  <label><input type="checkbox" name="dry_run" {% if settings.dry_run == 'true' %}checked{% endif %}> Dry run (log actions, perform none)</label>
+
+  <label for="poll_interval_seconds">Poll interval (seconds)</label>
+  <input type="number" name="poll_interval_seconds" id="poll_interval_seconds" value="{{ settings.poll_interval_seconds }}">
+
+  <label for="sidecar_extensions">Sidecar extensions (comma-separated)</label>
+  <input type="text" name="sidecar_extensions" id="sidecar_extensions" value="{{ settings.sidecar_extensions }}">
+
+  <label for="verify_mode">Verify mode</label>
+  <select name="verify_mode" id="verify_mode">
+    <option value="size" {% if settings.verify_mode == 'size' %}selected{% endif %}>Size</option>
+    <option value="checksum" {% if settings.verify_mode == 'checksum' %}selected{% endif %}>Checksum</option>
+  </select>
+
+  <button type="submit">Save</button>
+</form>
+{% endblock %}

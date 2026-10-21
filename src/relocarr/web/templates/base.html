@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>relocarr{% block title %}{% endblock %}</title>
+<style>
+  :root {
+    --bg-sidebar: #27272b;
+    --bg-content: #1a1a1d;
+    --bg-card: #222225;
+    --bg-input: #2c2c30;
+    --border: #3a3a3e;
+    --text: #d6d6d9;
+    --text-dim: #8a8a8f;
+    --accent: #f2a900;
+    --btn-primary: #3a7bd5;
+    --btn-danger: #d9534f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg-content);
+    color: var(--text);
+    display: flex;
+    min-height: 100vh;
+  }
+  nav.sidebar {
+    width: 220px;
+    background: var(--bg-sidebar);
+    flex-shrink: 0;
+    padding: 16px 0;
+  }
+  nav.sidebar .logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 20px 20px;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.5px;
+  }
+  nav.sidebar .logo span.mark { color: var(--accent); font-size: 22px; }
+  nav.sidebar a {
+    display: block;
+    padding: 10px 20px;
+    color: var(--text);
+    text-decoration: none;
+    font-size: 14px;
+  }
+  nav.sidebar a:hover { background: #323236; }
+  nav.sidebar a.active { color: var(--accent); font-weight: 600; }
+  main {
+    flex: 1;
+    padding: 28px 36px;
+  }
+  h1 { font-weight: 600; font-size: 22px; margin: 0 0 20px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
+  th { color: var(--text-dim); font-weight: 600; text-transform: uppercase; font-size: 11px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 20px; margin-bottom: 16px; }
+  .empty-state { color: var(--text-dim); padding: 40px 0; text-align: center; }
+  label { display: block; font-size: 13px; color: var(--text-dim); margin: 14px 0 4px; }
+  input[type=text], input[type=url], input[type=number], select {
+    width: 100%; max-width: 420px; padding: 8px 10px; background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: 3px; color: var(--text); font-size: 14px;
+  }
+  button {
+    margin-top: 18px; padding: 8px 18px; border-radius: 3px; border: none;
+    background: var(--btn-primary); color: white; font-size: 14px; cursor: pointer;
+  }
+  button:hover { opacity: 0.9; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; background: #2e7d32; color: white; }
+  .error { color: #f28b82; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+  <nav class="sidebar">
+    <div class="logo"><span class="mark">&#9654;</span> RELOCARR</div>
+    <a href="/" class="{% block nav_dashboard %}{% endblock %}">Dashboard</a>
+    <a href="/apps/new" class="{% block nav_apps %}{% endblock %}">Add App</a>
+    <a href="/settings" class="{% block nav_settings %}{% endblock %}">Settings</a>
+  </nav>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

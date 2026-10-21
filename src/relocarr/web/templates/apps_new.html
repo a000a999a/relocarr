@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block nav_apps %}active{% endblock %}
+{% block content %}
+<h1>Add an app</h1>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="post" action="/apps/new">
+  <label for="kind">Type</label>
+  <select name="kind" id="kind">
+    <option value="radarr" {% if values.kind == 'radarr' %}selected{% endif %}>Radarr</option>
+    <option value="sonarr" {% if values.kind == 'sonarr' %}selected{% endif %}>Sonarr</option>
+  </select>
+
+  <label for="name">Name</label>
+  <input type="text" name="name" id="name" value="{{ values.name or '' }}" required>
+
+  <label for="base_url">URL</label>
+  <input type="url" name="base_url" id="base_url" placeholder="http://radarr:7878" value="{{ values.base_url or '' }}" required>
+
+  <label for="api_key">API Key</label>
+  <input type="text" name="api_key" id="api_key" value="{{ values.api_key or '' }}" required>
+
+  <button type="submit">Test &amp; Add</button>
+</form>
+{% endblock %}

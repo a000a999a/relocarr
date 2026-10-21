@@ -1,0 +1,42 @@
+{
+  "movieId": 17,
+  "sourceTitle": "Sample Movie (2025) 1080p BluRay 5.1-GROUP",
+  "languages": [
+    {
+      "id": 1,
+      "name": "English"
+    }
+  ],
+  "quality": {
+    "quality": {
+      "id": 7,
+      "name": "Bluray-1080p",
+      "source": "bluray",
+      "resolution": 1080,
+      "modifier": "none"
+    },
+    "revision": {
+      "version": 1,
+      "real": 0,
+      "isRepack": false
+    }
+  },
+  "customFormats": [],
+  "customFormatScore": 0,
+  "qualityCutoffNotMet": false,
+  "date": "2026-10-21T17:26:00Z",
+  "downloadId": "0123456789ABCDEF0123456789ABCDEF01234567",
+  "eventType": "downloadFolderImported",
+  "data": {
+    "fileId": "16",
+    "droppedPath": "/home/user/Downloads/transmission/radarr/Sample Movie (2025) 1080p BluRay 5.1-GROUP/Sample.Movie.2025.1080p.BluRay.x264.AAC5.1-GROUP.mp4",
+    "importedPath": "/home/user/Downloads/transmission/relocarr/movies/Sample Movie2025/Sample Movie.2025.mp4",
+    "downloadClient": "Transmission",
+    "downloadClientName": "Transmission",
+    "releaseGroup": "GROUP",
+    "customFormatScore": "0",
+    "size": "2645421980",
+    "indexerFlags": "G_Freeleech"
+  },
+  "id": 33
+}
