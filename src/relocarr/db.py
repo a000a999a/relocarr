@@ -62,6 +62,8 @@ CREATE TABLE IF NOT EXISTS jobs (
                       'RECONCILED', 'CLEANED', 'DONE', 'NEEDS_ATTENTION', 'SKIPPED'
                   )),
     error         TEXT,
+    retry_count   INTEGER NOT NULL DEFAULT 0,  -- transient-failure count, drives backoff (Section 12)
+    next_attempt_at TEXT,  -- NULL = attempt immediately; set on a transient failure
     created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     -- Duplicate webhooks (retries) are de-duplicated by (app, fileId) -- Section 12.

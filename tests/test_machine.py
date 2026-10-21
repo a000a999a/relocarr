@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from relocarr.db import init_db, session
-from relocarr.jobs.machine import advance_clean, advance_copy, advance_reconcile
+from relocarr.jobs.machine import advance_clean, advance_copy, advance_reconcile, compute_backoff_minutes
 
 from .fakes import FakeArrApp
 
@@ -200,3 +200,67 @@ def test_advance_clean_dry_run_leaves_folder_and_state(db_path, tmp_path):
 
     assert movie_folder.exists()
     assert _get_job(db_path, job_id)["state"] == "RECONCILED"
+
+
+def test_backoff_doubles_and_caps(db_path):
+    assert compute_backoff_minutes(1) == 2
+    assert compute_backoff_minutes(2) == 4
+    assert compute_backoff_minutes(3) == 8
+    assert compute_backoff_minutes(4) == 16
+    assert compute_backoff_minutes(5) == 30  # 32 capped to 30
+    assert compute_backoff_minutes(10) == 30  # stays capped
+
+
+def test_advance_copy_schedules_backoff_when_destination_unhealthy(db_path, tmp_path):
+    app_id = _insert_app(db_path)
+    source = tmp_path / "staging" / "movie.mkv"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"data")
+
+    # Target's parent path component is actually a FILE, not a directory --
+    # mkdir(parents=True) must fail deterministically, simulating a dead
+    # destination without relying on permission bits (which root bypasses).
+    blocker = tmp_path / "target_is_a_file"
+    blocker.write_bytes(b"not a directory")
+    target = blocker / "sub" / "movie.mkv"
+
+    job_id = _insert_job(db_path, app_id, source_path=source, target_path=target)
+
+    with session(db_path) as conn:
+        job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        advance_copy(conn, job, sidecar_extensions=[], verify_mode="size")
+
+    job = _get_job(db_path, job_id)
+    assert job["state"] == "COPYING"  # stays in COPYING, not NEEDS_ATTENTION -- this is transient
+    assert job["retry_count"] == 1
+    assert job["error"]
+
+    from datetime import datetime, timezone
+
+    next_attempt = datetime.strptime(job["next_attempt_at"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(
+        tzinfo=timezone.utc
+    )
+    assert next_attempt > datetime.now(timezone.utc)  # scheduled into the future, ~2 min out
+
+
+def test_advance_copy_resets_backoff_bookkeeping_on_success(db_path, tmp_path):
+    app_id = _insert_app(db_path)
+    source = tmp_path / "staging" / "movie.mkv"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"data")
+    target = tmp_path / "target" / "movie.mkv"
+    job_id = _insert_job(db_path, app_id, source_path=source, target_path=target)
+
+    # Simulate a job that already failed twice before this (successful) attempt.
+    with session(db_path) as conn:
+        conn.execute(
+            "UPDATE jobs SET retry_count = 2, next_attempt_at = '2020-01-01T00:00:00.000Z' WHERE id = ?",
+            (job_id,),
+        )
+        job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        advance_copy(conn, job, sidecar_extensions=["srt"], verify_mode="size")
+
+    job = _get_job(db_path, job_id)
+    assert job["state"] == "PUBLISHED"
+    assert job["retry_count"] == 0
+    assert job["next_attempt_at"] is None

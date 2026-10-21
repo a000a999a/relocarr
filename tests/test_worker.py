@@ -160,3 +160,47 @@ def test_removal_gate_withholds_while_queue_entry_still_present(db_path, tmp_pat
 
     assert _state(db_path, job_id) == "RECONCILED"  # not CLEANED
     assert download_client.removed == []
+
+
+def test_backoff_blocks_pickup_until_next_attempt_time_passes(db_path, tmp_path):
+    app_id = _insert_app(db_path)
+    source = tmp_path / "staging" / "movie.mkv"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"data")
+    job_id = _insert_job(db_path, app_id, media_file_id="f1", source_path=source, target_path=tmp_path / "target" / "movie.mkv")
+
+    with session(db_path) as conn:
+        # Simulate a job that just failed transiently and is scheduled for
+        # the future -- jobs/machine.py's _schedule_retry sets exactly this.
+        conn.execute(
+            "UPDATE jobs SET state = 'COPYING', next_attempt_at = '2099-01-01T00:00:00.000Z' WHERE id = ?",
+            (job_id,),
+        )
+        run_once(
+            conn, app_id=app_id, arr_client=FakeArrApp(), download_client=None,
+            sidecar_extensions=[], verify_mode="size",
+        )
+
+    # Must NOT have been touched -- the file was never copied, state untouched.
+    assert not (tmp_path / "target" / "movie.mkv").exists()
+    assert _state(db_path, job_id) == "COPYING"
+
+
+def test_backoff_allows_pickup_once_next_attempt_time_has_passed(db_path, tmp_path):
+    app_id = _insert_app(db_path)
+    source = tmp_path / "staging" / "movie.mkv"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"data")
+    job_id = _insert_job(db_path, app_id, media_file_id="f1", source_path=source, target_path=tmp_path / "target" / "movie.mkv")
+
+    with session(db_path) as conn:
+        conn.execute(
+            "UPDATE jobs SET state = 'COPYING', next_attempt_at = '2000-01-01T00:00:00.000Z' WHERE id = ?",
+            (job_id,),
+        )
+        run_once(
+            conn, app_id=app_id, arr_client=FakeArrApp(file_paths={"f1": source}), download_client=None,
+            sidecar_extensions=[], verify_mode="size",
+        )
+
+    assert (tmp_path / "target" / "movie.mkv").exists()

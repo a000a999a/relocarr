@@ -28,8 +28,14 @@ def run_once(
     task (not yet wired into main.py) decides polling cadence, per the
     Settings page's configurable poll interval (Section 9).
     """
+    # next_attempt_at gates a job that just took a transient failure --
+    # Section 12's exponential backoff, computed and set by
+    # jobs/machine.py's _schedule_retry. NULL means "attempt immediately"
+    # (a fresh IMPORTED job, or one that never failed).
     for job in conn.execute(
-        "SELECT * FROM jobs WHERE app_id = ? AND state IN ('IMPORTED', 'COPYING')", (app_id,)
+        """SELECT * FROM jobs WHERE app_id = ? AND state IN ('IMPORTED', 'COPYING')
+           AND (next_attempt_at IS NULL OR next_attempt_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))""",
+        (app_id,),
     ).fetchall():
         advance_copy(
             conn, job, sidecar_extensions=sidecar_extensions, verify_mode=verify_mode, dry_run=dry_run
