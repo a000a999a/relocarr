@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %} - {{ app.name }}{% endblock %}
+{% block content %}
+<h1>{{ app.name }} <span style="color: var(--text-dim); font-weight: 400; font-size: 14px;">({{ app.kind }})</span></h1>
+
+<div class="card">
+  <label>Staging folder (set when added, from the *arr's root folders)</label>
+  <input type="text" value="{{ app.staging_root }}" disabled>
+
+  <form method="post" action="/apps/{{ app.id }}">
+    <label for="target_root">Target folder</label>
+    <input type="text" name="target_root" id="target_root" value="{{ app.target_root }}" placeholder="/mnt/nvidia/movies">
+    {% if target_error %}
+      <div class="error" style="margin-top: 4px;">{{ target_error }}</div>
+    {% elif app.target_root %}
+      <div style="color: #81c995; font-size: 12px; margin-top: 4px;">OK -- exists, writable, distinct from staging</div>
+    {% endif %}
+
+    <label for="layout_mode">Layout</label>
+    {% if app.kind == 'sonarr' %}
+      <select name="layout_mode" id="layout_mode" disabled>
+        <option value="preserve" selected>preserve (fixed for Sonarr)</option>
+      </select>
+      <input type="hidden" name="layout_mode" value="preserve">
+    {% else %}
+      <select name="layout_mode" id="layout_mode">
+        <option value="flat" {% if app.layout_mode == 'flat' %}selected{% endif %}>flat</option>
+        <option value="preserve" {% if app.layout_mode == 'preserve' %}selected{% endif %}>preserve</option>
+      </select>
+    {% endif %}
+
+    <label for="max_file_size_gb">Max file size (GB, blank = unlimited)</label>
+    <input type="text" name="max_file_size_gb" id="max_file_size_gb"
+           value="{{ (app.max_file_size_bytes / (1024**3)) | round(2) if app.max_file_size_bytes else '' }}"
+           placeholder="e.g. 4.5">
+
+    <label for="conflict_policy">Conflict policy (target already exists)</label>
+    <select name="conflict_policy" id="conflict_policy">
+      <option value="skip" {% if app.conflict_policy == 'skip' %}selected{% endif %}>skip (flag the job)</option>
+      <option value="replace" {% if app.conflict_policy == 'replace' %}selected{% endif %}>replace</option>
+      <option value="keep_both" {% if app.conflict_policy == 'keep_both' %}selected{% endif %}>keep both</option>
+    </select>
+
+    <button type="submit">Save</button>
+  </form>
+</div>
+
+<div class="card">
+  <h1 style="font-size: 16px; margin-bottom: 12px;">Download clients</h1>
+  {% if download_clients %}
+  <table>
+    <tr><th>Kind</th><th>Host</th><th>Port</th><th>Stop on completion</th><th>Remove after copy</th></tr>
+    {% for dc in download_clients %}
+    <tr>
+      <td>{{ dc.kind }}</td>
+      <td>{{ dc.host }}</td>
+      <td>{{ dc.port }}</td>
+      <td>{{ "Yes" if dc.stop_on_completion else "No" }}</td>
+      <td>{{ "Yes" if dc.remove_after_copy else "No" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p style="color: var(--text-dim);">No download client configured yet -- the SEALED/stop-on-completion step won't run until one is added.</p>
+  {% endif %}
+
+  <form method="post" action="/apps/{{ app.id }}/download-client" style="margin-top: 16px;">
+    <label for="host">Host</label>
+    <input type="text" name="host" id="host" placeholder="transmission" required>
+
+    <label for="port">Port</label>
+    <input type="number" name="port" id="port" value="9091" required>
+
+    <label for="username">Username (optional)</label>
+    <input type="text" name="username" id="username">
+
+    <label for="password">Password (optional)</label>
+    <input type="text" name="password" id="password">
+
+    <label><input type="checkbox" name="stop_on_completion" checked> Stop on completion</label>
+    <label><input type="checkbox" name="remove_after_copy" checked> Remove after copy</label>
+
+    <button type="submit">Add Transmission client</button>
+  </form>
+</div>
+
+<div class="card">
+  <h1 style="font-size: 16px; margin-bottom: 12px;">Webhook</h1>
+  <p style="font-size: 13px; color: var(--text-dim);">
+    Add this as a Webhook connection in {{ app.kind | capitalize }} (Connect &rarr; Webhook), method POST,
+    enabled for On Import and On Upgrade:
+  </p>
+  <p style="font-size: 13px;">
+    URL: <code>{{ request.url_for('webhook', app_id=app.id) }}</code><br>
+    Header: <code>X-Relocarr-Token: {{ app.webhook_token }}</code>
+  </p>
+</div>
+{% endblock %}

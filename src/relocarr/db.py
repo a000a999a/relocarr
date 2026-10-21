@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     size_bytes    INTEGER NOT NULL,
     state         TEXT NOT NULL DEFAULT 'IMPORTED' CHECK (state IN (
                       'IMPORTED', 'COPYING', 'VERIFIED', 'PUBLISHED',
-                      'RECONCILED', 'CLEANED', 'DONE', 'NEEDS_ATTENTION'
+                      'RECONCILED', 'CLEANED', 'DONE', 'NEEDS_ATTENTION', 'SKIPPED'
                   )),
     error         TEXT,
     created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

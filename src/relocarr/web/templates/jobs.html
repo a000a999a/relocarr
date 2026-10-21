@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block nav_jobs %}active{% endblock %}
+{% block content %}
+<h1>Jobs</h1>
+
+{% if jobs %}
+<table>
+  <tr><th>App</th><th>State</th><th>Target</th><th>Size</th><th>Error</th><th>Actions</th></tr>
+  {% for job in jobs %}
+  <tr>
+    <td>{{ job.app_name }}</td>
+    <td>
+      {% if job.state == 'NEEDS_ATTENTION' %}
+        <span class="badge" style="background: var(--btn-danger);">{{ job.state }}</span>
+      {% elif job.state == 'DONE' %}
+        <span class="badge">{{ job.state }}</span>
+      {% elif job.state == 'SKIPPED' %}
+        <span class="badge" style="background: var(--text-dim);">{{ job.state }}</span>
+      {% else %}
+        <span class="badge" style="background: var(--btn-primary);">{{ job.state }}</span>
+      {% endif %}
+    </td>
+    <td style="font-size: 12px;">{{ job.target_path }}</td>
+    <td>{{ (job.size_bytes / (1024**3)) | round(2) }} GB</td>
+    <td style="font-size: 12px; color: var(--btn-danger);">{{ job.error or "" }}</td>
+    <td>
+      {% if job.state == 'NEEDS_ATTENTION' %}
+        <form method="post" action="/jobs/{{ job.id }}/retry" style="display:inline;">
+          <button type="submit" style="margin-top:0; padding: 4px 10px; font-size: 12px;">Retry</button>
+        </form>
+        <form method="post" action="/jobs/{{ job.id }}/skip" style="display:inline;">
+          <button type="submit" style="margin-top:0; padding: 4px 10px; font-size: 12px; background: var(--btn-danger);">Skip</button>
+        </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="card empty-state">No jobs yet.</div>
+{% endif %}
+{% endblock %}
