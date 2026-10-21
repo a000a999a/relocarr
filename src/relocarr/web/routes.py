@@ -1,13 +1,20 @@
-from fastapi import APIRouter, Form, Request
+import secrets
+
+from fastapi import APIRouter, Form, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import arr
+from ..arr.payloads import parse_radarr_webhook, parse_sonarr_webhook
 from ..config import settings
 from ..db import session
+from ..transfer.layout import compute_target_path
+from ..transfer.safety import PathSafetyError
 
 router = APIRouter()
 templates = Jinja2Templates(directory="src/relocarr/web/templates")
+
+_PARSERS = {"radarr": parse_radarr_webhook, "sonarr": parse_sonarr_webhook}
 
 
 @router.get("/")
@@ -46,20 +53,76 @@ def apps_new_submit(
         )
 
     root_folders = client.list_root_folders()
+    webhook_token = secrets.token_urlsafe(32)
     with session(settings.db_path) as conn:
         conn.execute(
-            """INSERT INTO apps (kind, name, base_url, api_key, staging_root, target_root)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO apps (kind, name, base_url, api_key, webhook_token, staging_root, target_root)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
                 kind,
                 name,
                 base_url,
                 api_key,
+                webhook_token,
                 root_folders[0].path if root_folders else "",
                 "",
             ),
         )
     return RedirectResponse("/", status_code=303)
+
+
+@router.post("/webhook/{app_id}")
+def webhook(
+    app_id: int,
+    payload: dict,
+    x_relocarr_token: str | None = Header(None),
+):
+    """Receives the *arr's "Download" webhook event. Section 10: the *arr's
+    Webhook connection must send this app's token in the X-Relocarr-Token
+    header. Creates one job per imported file at state IMPORTED, with its
+    target path already resolved (Section 5).
+    """
+    with session(settings.db_path) as conn:
+        app = conn.execute("SELECT * FROM apps WHERE id = ?", (app_id,)).fetchone()
+        if app is None:
+            raise HTTPException(404, "unknown app")
+        if not secrets.compare_digest(x_relocarr_token or "", app["webhook_token"]):
+            raise HTTPException(401, "invalid webhook token")
+
+        if not app["target_root"]:
+            raise HTTPException(409, "app has no target folder configured yet")
+
+        parser = _PARSERS[app["kind"]]
+        files = parser(payload)
+
+        created = 0
+        for f in files:
+            try:
+                target_path = compute_target_path(
+                    source_path=f.source_path,
+                    staging_root=app["staging_root"],
+                    target_root=app["target_root"],
+                    mode=app["layout_mode"],
+                )
+            except PathSafetyError:
+                continue  # refuse to create a job that would write outside the target root
+
+            cursor = conn.execute(
+                """INSERT OR IGNORE INTO jobs
+                   (app_id, download_id, media_file_id, source_path, target_path, size_bytes, state)
+                   VALUES (?, ?, ?, ?, ?, ?, 'IMPORTED')""",
+                (
+                    app_id,
+                    f.download_id,
+                    f.file_id,
+                    f.source_path,
+                    str(target_path),
+                    f.size_bytes,
+                ),
+            )
+            created += cursor.rowcount
+
+    return {"jobs_created": created}
 
 
 @router.get("/settings")

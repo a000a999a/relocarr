@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS apps (
     name                 TEXT NOT NULL,
     base_url             TEXT NOT NULL,
     api_key              TEXT NOT NULL,
+    webhook_token        TEXT NOT NULL,   -- X-Relocarr-Token the *arr's webhook must send (Section 10)
     staging_root         TEXT NOT NULL,
     target_root          TEXT NOT NULL,
     layout_mode          TEXT NOT NULL DEFAULT 'flat' CHECK (layout_mode IN ('flat', 'preserve')),
@@ -61,7 +62,11 @@ CREATE TABLE IF NOT EXISTS jobs (
                   )),
     error         TEXT,
     created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    -- Duplicate webhooks (retries) are de-duplicated by (app, fileId) -- Section 12.
+    -- A genuine future upgrade gets a new movieFile/episodeFile id from the *arr,
+    -- so this never blocks a real re-import, only a retried delivery of the same one.
+    UNIQUE (app_id, media_file_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state);
