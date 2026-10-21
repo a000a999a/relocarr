@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     app_id        INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
     download_id   TEXT,
     media_file_id TEXT NOT NULL,      -- the *arr's movieFile/episodeFile id
+    unmonitor_id  INTEGER NOT NULL,   -- movie id (Radarr) or episode id (Sonarr, Section 6)
     source_path   TEXT NOT NULL,      -- staging path
     target_path   TEXT NOT NULL,      -- computed destination path
     size_bytes    INTEGER NOT NULL,

@@ -13,7 +13,19 @@ from pathlib import Path
 # only reproduced a success-path rsync; the actual wedge in PLAN.md Section 16
 # happened with `cp`, before this module existed). Revisit once rsync itself
 # has failed against a real degraded destination.
+#
+# Confirmed live (building this module): exit code 23 is ALSO what rsync
+# returns for a missing source -- a permanent error in our context (the
+# job's source never reappears), not a transient destination issue, despite
+# sharing the same exit code as genuine partial-transfer failures. The exact
+# wording depends on WHAT's missing -- a missing file says
+# `[sender] link_stat "..." failed: No such file or directory`, a missing
+# parent directory says `[sender] change_dir "..." failed: ...` instead.
+# `[sender]` itself is the reliable marker: it tags any error as being about
+# OUR OWN local (source) path, as opposed to a receiver/destination-side
+# problem, regardless of which specific syscall rsync was attempting.
 _TRANSIENT_RSYNC_EXIT_CODES = {10, 11, 12, 23, 30}
+_SENDER_SIDE_ERROR_MARKER = "[sender]"
 
 
 @dataclass
@@ -55,8 +67,9 @@ def rsync_copy(source: Path, dest: Path, *, timeout: float | None = None) -> Cop
     if proc.returncode == 0:
         return CopyResult(ok=True)
 
-    transient = proc.returncode in _TRANSIENT_RSYNC_EXIT_CODES
     message = proc.stderr.strip() or proc.stdout.strip() or f"rsync exit {proc.returncode}"
+    sender_side_error = _SENDER_SIDE_ERROR_MARKER in message
+    transient = proc.returncode in _TRANSIENT_RSYNC_EXIT_CODES and not sender_side_error
     return CopyResult(ok=False, error=message, transient=transient)
 
 

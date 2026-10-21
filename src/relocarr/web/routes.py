@@ -107,17 +107,30 @@ def webhook(
             except PathSafetyError:
                 continue  # refuse to create a job that would write outside the target root
 
+            max_size = app["max_file_size_bytes"]
+            if max_size and f.size_bytes > max_size:
+                # Section 9/16: configurable per-destination guard, added after
+                # the 13.6 GB Shield-wedge incident -- flagged, never attempted.
+                initial_state = "NEEDS_ATTENTION"
+                error = f"file size {f.size_bytes} exceeds configured max {max_size}"
+            else:
+                initial_state = "IMPORTED"
+                error = None
+
             cursor = conn.execute(
                 """INSERT OR IGNORE INTO jobs
-                   (app_id, download_id, media_file_id, source_path, target_path, size_bytes, state)
-                   VALUES (?, ?, ?, ?, ?, ?, 'IMPORTED')""",
+                   (app_id, download_id, media_file_id, unmonitor_id, source_path, target_path, size_bytes, state, error)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     app_id,
                     f.download_id,
                     f.file_id,
+                    f.unmonitor_id,
                     f.source_path,
                     str(target_path),
                     f.size_bytes,
+                    initial_state,
+                    error,
                 ),
             )
             created += cursor.rowcount

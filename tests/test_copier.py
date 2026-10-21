@@ -55,3 +55,7 @@ def test_rsync_copy_reports_error_for_missing_source(tmp_path):
 
     result = rsync_copy(source, dest)
     assert not result.ok
+    # A missing source is permanent in our context (it never reappears),
+    # despite rsync using the same exit code (23) for genuine transient
+    # partial-transfer failures -- confirmed live while building this module.
+    assert not result.transient
