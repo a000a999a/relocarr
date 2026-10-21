@@ -53,6 +53,9 @@ class FakeDownloadClient:
 
     def stop(self, torrent_id: int) -> None:
         self.stopped.append(torrent_id)
+        for t in self.torrents:
+            if t.id == torrent_id:
+                t.status = 0  # mirrors Transmission's real stopped status (spike 4)
 
     def remove(self, torrent_id: int, delete_data: bool) -> None:
         self.removed.append((torrent_id, delete_data))

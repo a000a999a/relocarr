@@ -20,6 +20,11 @@ class Torrent:
         # showed isFinished=false at percentDone=1.0 and status=stopped.
         return self.percent_done >= 1.0
 
+    @property
+    def is_stopped(self) -> bool:
+        # Transmission status 0 = stopped, confirmed live, spike 4 (2026-10-21).
+        return self.status == 0
+
 
 class DownloadClient(Protocol):
     def list_torrents(self) -> list[Torrent]: ...
