@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block nav_setup_guide %}active{% endblock %}
+{% block content %}
+<h1>Setup Guide</h1>
+<p style="color: var(--text-dim); font-size: 13px; max-width: 760px; margin-top: -10px;">
+  The core risk relocarr exists to manage is <em>two things moving the same files</em> -- the
+  *arr's own import and relocarr's ferry step. Most rows below are also checked live on each
+  app's own <strong>Preflight</strong> page (Settings &rarr; App Config &rarr; pick an app); the
+  ones marked <span class="badge" style="background: var(--text-dim);">one-time</span> are setup
+  steps, not an ongoing setting, so nothing can check them continuously.
+</p>
+
+<div class="card">
+  <h1 style="font-size: 16px; margin-bottom: 12px;">Radarr</h1>
+  <table>
+    <tr><th>Setting</th><th>Required</th><th>Why</th></tr>
+    <tr>
+      <td>Root folders</td>
+      <td>Only the staging folder (e.g. the path shown on the app's App Config page). Remove any root folder on the destination.</td>
+      <td>Otherwise Radarr still writes to the destination itself.</td>
+    </tr>
+    <tr>
+      <td>Existing movies <span class="badge" style="background: var(--text-dim);">one-time</span></td>
+      <td>Repoint to the staging root <strong>without moving files</strong> (Movie Editor &rarr; change root folder &rarr; "no, I'll move them").</td>
+      <td>Their stored paths would otherwise still point at the destination.</td>
+    </tr>
+    <tr>
+      <td>Collections and Import Lists <span class="badge" style="background: var(--text-dim);">one-time</span></td>
+      <td>Repoint each one's own Root Folder field too (Movies &rarr; Collections, and Settings &rarr; Import Lists) -- they store it separately from individual movies.</td>
+      <td>A removed destination root folder leaves these pointing at a now-missing path.</td>
+    </tr>
+    <tr>
+      <td>Download Client &rarr; Completed Download Handling (global, above the client list)</td>
+      <td>On</td>
+      <td>Unrelated to relocarr itself, but required for Radarr to ever notice a finished download at all.</td>
+    </tr>
+    <tr>
+      <td>Connect &rarr; Webhook</td>
+      <td>Add one: the URL and <code>X-Relocarr-Token</code> header shown on the app's detail page, method POST, On Import + On Upgrade enabled.</td>
+      <td>The trigger relocarr needs.</td>
+    </tr>
+    <tr>
+      <td>Connect &rarr; Plex / Jellyfin / Emby</td>
+      <td>All triggers disabled</td>
+      <td>They'd scan the staging path, which the media server can't see.</td>
+    </tr>
+    <tr>
+      <td>Download client &rarr; Remove Completed Downloads</td>
+      <td>Off</td>
+      <td>relocarr removes the torrent itself -- leaving this on collides with that cleanup.</td>
+    </tr>
+    <tr>
+      <td>Media Management &rarr; Recycle Bin</td>
+      <td>Empty</td>
+      <td>Otherwise API deletes fill the recycle bin instead of freeing staging.</td>
+    </tr>
+    <tr>
+      <td>Media Management &rarr; Use Hardlinks instead of Copy</td>
+      <td>On</td>
+      <td>Instant import, no extra space -- requires staging and downloads on the same mount.</td>
+    </tr>
+    <tr>
+      <td>Media Management &rarr; Rename Movies</td>
+      <td>On</td>
+      <td>The naming format is the only source of the destination filename.</td>
+    </tr>
+    <tr>
+      <td>Import Extra Files</td>
+      <td>Extensions match relocarr's sidecar list (Settings &rarr; General)</td>
+      <td>Sidecars are only copied if the *arr imported them in the first place.</td>
+    </tr>
+  </table>
+</div>
+
+<div class="card">
+  <h1 style="font-size: 16px; margin-bottom: 12px;">Sonarr</h1>
+  <p style="font-size: 13px; color: var(--text-dim);">Same table as Radarr, with the TV staging folder and <strong>Rename Episodes</strong> instead, plus:</p>
+  <table>
+    <tr><th>Setting</th><th>Required</th><th>Why</th></tr>
+    <tr>
+      <td>Media Management &rarr; Season Folder Format <span class="badge" style="background: var(--text-dim);">one-time</span></td>
+      <td>Must produce the same folder names the destination already uses</td>
+      <td>relocarr copies Sonarr's path as-is -- a mismatch creates duplicate season folders.</td>
+    </tr>
+    <tr>
+      <td>Media Management &rarr; Series Folder Format / per-show path <span class="badge" style="background: var(--text-dim);">one-time</span></td>
+      <td>Folder name identical to the existing destination folder</td>
+      <td>A mismatch creates a duplicate series folder next to the real one.</td>
+    </tr>
+    <tr>
+      <td>Series &rarr; Season Folders</td>
+      <td>On for every series</td>
+      <td>Season subfolders are mandatory in the <code>preserve</code> layout Sonarr always uses.</td>
+    </tr>
+  </table>
+  <p style="font-size: 12px; color: var(--text-dim); margin-top: 12px;">
+    Layout mode is locked to <code>preserve</code> for Sonarr in relocarr -- there's no "flat" option to pick by mistake.
+  </p>
+</div>
+
+<div class="card">
+  <h1 style="font-size: 16px; margin-bottom: 12px;">Transmission</h1>
+  <table>
+    <tr><th>Setting</th><th>Required</th><th>Why</th></tr>
+    <tr>
+      <td>RPC reachability</td>
+      <td>Relocarr's container must be able to reach Transmission's RPC host:port (same Docker network, or the right host/port otherwise).</td>
+      <td>Every seal/stop/remove action goes through this. No other Transmission setting matters if this doesn't work.</td>
+    </tr>
+    <tr>
+      <td>RPC authentication</td>
+      <td>If Transmission requires a username/password, enter the same ones in that app's Download Client config in relocarr.</td>
+      <td>relocarr authenticates the same way any other RPC client would.</td>
+    </tr>
+    <tr>
+      <td>"Stop seeding at ratio/idle" (Transmission's own setting)</td>
+      <td>Not required either way -- independent of relocarr</td>
+      <td>relocarr stops a torrent itself as soon as it's complete and tracked in the *arr's queue (the SEALED step). Relying on Transmission's own limit instead can race: if Transmission removes a torrent before relocarr ever sees it in the queue, relocarr never gets the chance to seal/clean it up itself.</td>
+    </tr>
+    <tr>
+      <td>Category per *arr instance</td>
+      <td>Recommended, not required by relocarr</td>
+      <td>relocarr doesn't filter by category -- this just keeps the *arr's own download routing tidy.</td>
+    </tr>
+  </table>
+</div>
+
+<div class="card">
+  <h1 style="font-size: 16px; margin-bottom: 12px;">Shared</h1>
+  <ul style="font-size: 13px; color: var(--text-dim); padding-left: 20px; margin: 0;">
+    <li style="margin-bottom: 6px;">relocarr's container must mount the download folder, staging folder, and destination at the <strong>same paths</strong> as the *arr and Transmission containers -- v0.1 has no path mapping.</li>
+    <li style="margin-bottom: 6px;">Staging must not be inside the destination or vice versa; relocarr refuses to compute a path otherwise.</li>
+    <li>Nothing else may write to the staging root. relocarr only ever deletes inside it, never above it.</li>
+  </ul>
+</div>
+{% endblock %}

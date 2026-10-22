@@ -514,6 +514,20 @@ def job_skip(job_id: int):
 
 
 # ----------------------------------------------------------------------
+# Setup Guide -- static reference content, PLAN.md Section 10's checklist
+# rendered in the UI. Most of the Radarr/Sonarr rows are also checked live
+# on that app's own Preflight page; this page exists for the ones that
+# aren't continuously checkable (one-time migration steps, and Transmission
+# itself, which has no equivalent of the *arr's settings API to introspect).
+# ----------------------------------------------------------------------
+
+
+@router.get("/setup-guide")
+def setup_guide(request: Request):
+    return templates.TemplateResponse(request, "setup_guide.html", {})
+
+
+# ----------------------------------------------------------------------
 # System (modeled on Radarr's System > Status page)
 # ----------------------------------------------------------------------
 

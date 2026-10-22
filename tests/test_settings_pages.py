@@ -115,3 +115,12 @@ def test_system_page_shows_disk_space_for_configured_paths(client, tmp_path):
     assert resp.status_code == 200
     assert str(staging) in resp.text
     assert "GiB" in resp.text
+
+
+def test_setup_guide_renders(client):
+    resp = client.get("/setup-guide")
+    assert resp.status_code == 200
+    assert "Radarr" in resp.text
+    assert "Sonarr" in resp.text
+    assert "Transmission" in resp.text
+    assert "Completed Download Handling" in resp.text
