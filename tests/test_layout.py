@@ -62,3 +62,23 @@ def test_sidecar_paths_matches_same_stem_and_extension(staging):
 
     result = sidecar_paths(main, extensions=["srt"])
     assert result == [srt]
+
+
+def test_compute_target_path_works_when_target_root_does_not_exist(staging, tmp_path):
+    # Reproduces the real production bug, 2026-10-22: the destination (a
+    # NAS the user deliberately powers off most of the time) wasn't
+    # mounted, so target_root didn't exist on disk. A job must still be
+    # creatable from the webhook in this case -- the destination's actual
+    # availability is checked for real at copy time instead (Section 12).
+    movie_dir = staging / "Big File Movie2026"
+    movie_dir.mkdir()
+    source = movie_dir / "Big File Movie.2026.mkv"
+    source.touch()
+
+    missing_target = tmp_path / "mnt" / "nvidia" / "movies"  # never created
+    assert not missing_target.exists()
+
+    result = compute_target_path(
+        source_path=source, staging_root=staging, target_root=missing_target, mode="flat"
+    )
+    assert result == (missing_target / "Big File Movie.2026.mkv").resolve(strict=False)

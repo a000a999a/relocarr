@@ -95,3 +95,28 @@ def test_webhook_requires_target_root_configured(client, tmp_path):
     payload = {"eventType": "Test"}
     resp = client.post(f"/webhook/{app_id}", json=payload, headers={"X-Relocarr-Token": token})
     assert resp.status_code == 409
+
+
+def test_webhook_creates_job_when_target_root_is_configured_but_not_mounted(client, tmp_path):
+    # Reproduces the real bug hit against the live production deployment,
+    # 2026-10-22: a real webhook fired from Radarr 500'd because the
+    # destination (target_root) was a configured but currently-unmounted
+    # path (the Shield NAS, deliberately off). A job must still get
+    # created -- destination availability belongs to the copy step
+    # (Section 12's health probe + backoff), not webhook receipt.
+    payload = json.loads((FIXTURES / "radarr_webhook_download_no_downloadid.json").read_text())
+    staging_root = str(Path(payload["movieFile"]["path"]).parent.parent)
+    unmounted_target = str(tmp_path / "mnt" / "nvidia" / "movies")
+    assert not Path(unmounted_target).exists()
+
+    app_id, token = _insert_app(staging_root, target_root=unmounted_target)
+
+    resp = client.post(f"/webhook/{app_id}", json=payload, headers={"X-Relocarr-Token": token})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"jobs_created": 1}
+
+    with session(app_settings.db_path) as conn:
+        job = conn.execute("SELECT * FROM jobs WHERE app_id = ?", (app_id,)).fetchone()
+    assert job["state"] == "IMPORTED"
+    assert job["target_path"].endswith("Example Film.2002.mp4")

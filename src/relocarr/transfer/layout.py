@@ -26,6 +26,13 @@ def compute_target_path(
     Raises PathSafetyError (via resolve_within) if the computed destination
     would fall outside target_root -- this also catches a source_path that
     isn't actually under staging_root.
+
+    target_root is resolved with must_exist=False: the destination can be
+    legitimately offline (e.g. a NAS that's deliberately powered off most
+    of the time -- confirmed in production, 2026-10-22) when a job is
+    first created from a webhook. staging_root always must exist -- it's
+    local. The existence/writability of target_root is checked for real at
+    copy time instead (transfer/health.py's probe, with backoff).
     """
     source = Path(source_path)
     staging = Path(staging_root)
@@ -39,7 +46,7 @@ def compute_target_path(
     else:
         raise ValueError(f"unknown layout mode: {mode!r}")
 
-    return resolve_within(candidate, target_root)
+    return resolve_within(candidate, target_root, must_exist=False)
 
 
 def sidecar_paths(source_path: str | Path, extensions: list[str]) -> list[Path]:

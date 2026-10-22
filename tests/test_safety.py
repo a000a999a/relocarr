@@ -49,3 +49,21 @@ def test_assert_distinct_roots_accepts_siblings(tmp_path):
     a.mkdir()
     b.mkdir()
     assert_distinct_roots(a, b)  # must not raise
+
+
+def test_resolve_within_must_exist_false_allows_nonexistent_root(tmp_path):
+    # Confirmed in production, 2026-10-22: a destination that's legitimately
+    # offline (NAS powered off) must not raise here -- that's the whole
+    # point of the offline-destination design (Section 12). Previously this
+    # raised an uncaught FileNotFoundError (strict=True), which crashed the
+    # webhook handler with a 500 before a job even got created.
+    missing_root = tmp_path / "does-not-exist-yet"
+    result = resolve_within(missing_root / "movie.mkv", missing_root, must_exist=False)
+    assert result == (missing_root / "movie.mkv").resolve(strict=False)
+
+
+def test_resolve_within_must_exist_false_still_catches_traversal(tmp_path):
+    missing_root = tmp_path / "does-not-exist-yet"
+    outside = tmp_path / "elsewhere" / "movie.mkv"
+    with pytest.raises(PathSafetyError):
+        resolve_within(outside, missing_root, must_exist=False)
