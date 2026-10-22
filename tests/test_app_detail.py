@@ -1,6 +1,8 @@
 from pathlib import Path
 
+import httpx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 
 from relocarr.config import settings as app_settings
@@ -114,3 +116,55 @@ def test_add_download_client(client, tmp_path):
     assert dc["port"] == 9091
     assert dc["stop_on_completion"] == 1
     assert dc["remove_after_copy"] == 1
+
+
+def test_delete_download_client_removes_it(client, tmp_path):
+    app_id = _insert_app(str(tmp_path))
+    with session(app_settings.db_path) as conn:
+        dc_id = conn.execute(
+            """INSERT INTO download_clients (app_id, kind, host, port)
+               VALUES (?, 'transmission', 'transmission', 9091)""",
+            (app_id,),
+        ).lastrowid
+
+    resp = client.post(f"/apps/{app_id}/download-client/{dc_id}/delete", follow_redirects=False)
+    assert resp.status_code == 303
+
+    with session(app_settings.db_path) as conn:
+        row = conn.execute("SELECT * FROM download_clients WHERE id = ?", (dc_id,)).fetchone()
+    assert row is None
+
+
+@respx.mock
+def test_update_connection_succeeds_and_saves(client, tmp_path):
+    app_id = _insert_app(str(tmp_path))
+    respx.get("http://new-radarr:7878/api/v3/system/status").mock(
+        return_value=httpx.Response(200, json={"version": "6.4.4"})
+    )
+
+    resp = client.post(
+        f"/apps/{app_id}/connection",
+        data={"base_url": "http://new-radarr:7878", "api_key": "newkey"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    with session(app_settings.db_path) as conn:
+        app = conn.execute("SELECT * FROM apps WHERE id = ?", (app_id,)).fetchone()
+    assert app["base_url"] == "http://new-radarr:7878"
+    assert app["api_key"] == "newkey"
+
+
+def test_update_connection_failure_does_not_save(client, tmp_path):
+    app_id = _insert_app(str(tmp_path))
+
+    resp = client.post(
+        f"/apps/{app_id}/connection",
+        data={"base_url": "http://unreachable-host-xyz:7878", "api_key": "newkey"},
+    )
+    assert resp.status_code == 200
+    assert "Connection failed" in resp.text
+
+    with session(app_settings.db_path) as conn:
+        app = conn.execute("SELECT * FROM apps WHERE id = ?", (app_id,)).fetchone()
+    assert app["base_url"] == "http://x"  # unchanged -- the bad value was never saved

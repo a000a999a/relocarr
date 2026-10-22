@@ -6,6 +6,28 @@
 </h1>
 
 <div class="card">
+  <h1 style="font-size: 16px; margin-bottom: 4px;">Connection</h1>
+  {% if connection_error %}
+    <div class="error">{{ connection_error }}</div>
+  {% elif connection_result %}
+    {% if connection_result.ok %}
+      <p style="color: #81c995; font-size: 12px;">Connected -- {{ app.kind | capitalize }} {{ connection_result.version }}</p>
+    {% else %}
+      <p style="color: var(--btn-danger); font-size: 12px;">Not reachable: {{ connection_result.error }}</p>
+    {% endif %}
+  {% endif %}
+  <form method="post" action="/apps/{{ app.id }}/connection">
+    <label for="base_url">URL</label>
+    <input type="url" name="base_url" id="base_url" value="{{ app.base_url }}" required>
+
+    <label for="api_key">API Key</label>
+    <input type="text" name="api_key" id="api_key" value="{{ app.api_key }}" required>
+
+    <button type="submit">Test &amp; Save</button>
+  </form>
+</div>
+
+<div class="card">
   <label>Staging folder (set when added, from the *arr's root folders)</label>
   <input type="text" value="{{ app.staging_root }}" disabled>
 
@@ -51,7 +73,7 @@
   <h1 style="font-size: 16px; margin-bottom: 12px;">Download clients</h1>
   {% if download_clients %}
   <table>
-    <tr><th>Kind</th><th>Host</th><th>Port</th><th>Stop on completion</th><th>Remove after copy</th></tr>
+    <tr><th>Kind</th><th>Host</th><th>Port</th><th>Stop on completion</th><th>Remove after copy</th><th></th></tr>
     {% for dc in download_clients %}
     <tr>
       <td>{{ dc.kind }}</td>
@@ -59,6 +81,11 @@
       <td>{{ dc.port }}</td>
       <td>{{ "Yes" if dc.stop_on_completion else "No" }}</td>
       <td>{{ "Yes" if dc.remove_after_copy else "No" }}</td>
+      <td>
+        <form method="post" action="/apps/{{ app.id }}/download-client/{{ dc.id }}/delete">
+          <button type="submit" style="margin-top:0; padding: 4px 10px; font-size: 12px; background: var(--btn-danger);">Delete</button>
+        </form>
+      </td>
     </tr>
     {% endfor %}
   </table>

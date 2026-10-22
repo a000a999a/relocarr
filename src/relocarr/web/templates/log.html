@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block nav_log %}active{% endblock %}
+{% block content %}
+<h1>Transfer Log</h1>
+
+{% if entries %}
+<table>
+  <tr><th>Time</th><th>App</th><th>File</th><th>Status</th><th>Size</th><th>Error</th></tr>
+  {% for e in entries %}
+  <tr>
+    <td style="font-size: 12px; white-space: nowrap;">{{ e.updated_at[:19].replace("T", " ") }}</td>
+    <td>{{ e.app_name }}</td>
+    <td style="font-size: 12px;">{{ e.target_path.split("/")[-1] }}</td>
+    <td>
+      {% if e.state == 'DONE' %}
+        <span class="badge" style="background: #2e7d32;">Success</span>
+      {% elif e.state == 'NEEDS_ATTENTION' %}
+        <span class="badge" style="background: var(--btn-danger);">Failed</span>
+      {% else %}
+        <span class="badge" style="background: var(--text-dim);">Skipped</span>
+      {% endif %}
+    </td>
+    <td>{{ (e.size_bytes / (1024**3)) | round(2) }} GB</td>
+    <td style="font-size: 12px; color: var(--btn-danger);">{{ e.error or "" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="card empty-state">No completed transfers yet.</div>
+{% endif %}
+{% endblock %}

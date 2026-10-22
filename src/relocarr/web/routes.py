@@ -110,11 +110,61 @@ def app_detail(request: Request, app_id: int):
         ).fetchall()
 
     target_error = _check_target_folder(app["staging_root"], app["target_root"])
+    connection_result = arr.make_app(app["kind"], app["base_url"], app["api_key"]).test_connection()
     return templates.TemplateResponse(
         request,
         "app_detail.html",
-        {"app": app, "download_clients": download_clients, "target_error": target_error},
+        {
+            "app": app,
+            "download_clients": download_clients,
+            "target_error": target_error,
+            "connection_result": connection_result,
+            "connection_error": None,
+        },
     )
+
+
+@router.post("/apps/{app_id}/connection")
+def app_connection_submit(
+    request: Request,
+    app_id: int,
+    base_url: str = Form(...),
+    api_key: str = Form(...),
+):
+    """Edit the *arr connection itself (URL/API key) -- the setup wizard
+    only sets these once at creation; this is the only way to change them
+    afterward (e.g. a rotated API key, or the *arr moved host/port).
+    Re-tests the connection before saving, same as the setup wizard.
+    """
+    with session(settings.db_path) as conn:
+        app = conn.execute("SELECT * FROM apps WHERE id = ?", (app_id,)).fetchone()
+        if app is None:
+            raise HTTPException(404, "unknown app")
+        download_clients = conn.execute(
+            "SELECT * FROM download_clients WHERE app_id = ?", (app_id,)
+        ).fetchall()
+
+    client = arr.make_app(app["kind"], base_url, api_key)
+    result = client.test_connection()
+    if not result.ok:
+        target_error = _check_target_folder(app["staging_root"], app["target_root"])
+        return templates.TemplateResponse(
+            request,
+            "app_detail.html",
+            {
+                "app": app,
+                "download_clients": download_clients,
+                "target_error": target_error,
+                "connection_result": None,
+                "connection_error": f"Connection failed: {result.error}. Not saved -- the previous URL/key are still in effect.",
+            },
+        )
+
+    with session(settings.db_path) as conn:
+        conn.execute(
+            "UPDATE apps SET base_url = ?, api_key = ? WHERE id = ?", (base_url, api_key, app_id)
+        )
+    return RedirectResponse(f"/apps/{app_id}", status_code=303)
 
 
 @router.post("/apps/{app_id}")
@@ -167,6 +217,15 @@ def add_download_client(
                 1 if stop_on_completion else 0,
                 1 if remove_after_copy else 0,
             ),
+        )
+    return RedirectResponse(f"/apps/{app_id}", status_code=303)
+
+
+@router.post("/apps/{app_id}/download-client/{dc_id}/delete")
+def delete_download_client(app_id: int, dc_id: int):
+    with session(settings.db_path) as conn:
+        conn.execute(
+            "DELETE FROM download_clients WHERE id = ? AND app_id = ?", (dc_id, app_id)
         )
     return RedirectResponse(f"/apps/{app_id}", status_code=303)
 
@@ -279,6 +338,23 @@ def jobs_list(request: Request):
                ORDER BY jobs.updated_at DESC LIMIT 200"""
         ).fetchall()
     return templates.TemplateResponse(request, "jobs.html", {"jobs": jobs})
+
+
+@router.get("/log")
+def transfer_log(request: Request):
+    """Historical record of finished transfer attempts -- success
+    (DONE), failed (NEEDS_ATTENTION), or skipped (SKIPPED) -- each with the
+    timestamp it reached that state. In-flight jobs (IMPORTED through
+    RECONCILED) don't appear here; see /jobs for those.
+    """
+    with session(settings.db_path) as conn:
+        entries = conn.execute(
+            """SELECT jobs.*, apps.name AS app_name FROM jobs
+               JOIN apps ON apps.id = jobs.app_id
+               WHERE jobs.state IN ('DONE', 'NEEDS_ATTENTION', 'SKIPPED')
+               ORDER BY jobs.updated_at DESC LIMIT 500"""
+        ).fetchall()
+    return templates.TemplateResponse(request, "log.html", {"entries": entries})
 
 
 @router.post("/jobs/{job_id}/retry")
