@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block nav_settings %}active{% endblock %}
+{% block nav_settings_download_clients %}active{% endblock %}
+{% block content %}
+<h1>Download Clients</h1>
+
+{% if clients %}
+<table>
+  <tr><th>App</th><th>Kind</th><th>Host</th><th>Port</th><th>Stop on completion</th><th>Remove after copy</th><th></th></tr>
+  {% for dc in clients %}
+  <tr>
+    <td><a href="/settings/apps/{{ dc.app_id }}" style="color: var(--accent); text-decoration: none;">{{ dc.app_name }}</a></td>
+    <td>{{ dc.kind }}</td>
+    <td>{{ dc.host }}</td>
+    <td>{{ dc.port }}</td>
+    <td>{{ "Yes" if dc.stop_on_completion else "No" }}</td>
+    <td>{{ "Yes" if dc.remove_after_copy else "No" }}</td>
+    <td>
+      <form method="post" action="/settings/download-clients/{{ dc.id }}/delete">
+        <button type="submit" style="margin-top:0; padding: 4px 10px; font-size: 12px; background: var(--btn-danger);">Delete</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="card empty-state">No download clients configured yet -- the SEALED/stop-on-completion step won't run for any app until one is added.</div>
+{% endif %}
+
+<div class="card" style="margin-top: 16px;">
+  <h1 style="font-size: 16px; margin-bottom: 12px;">Add a Transmission client</h1>
+  {% if apps %}
+  <form method="post" action="/settings/download-clients/new">
+    <label for="app_id">App</label>
+    <select name="app_id" id="app_id" required>
+      {% for app in apps %}
+      <option value="{{ app.id }}">{{ app.name }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="host">Host</label>
+    <input type="text" name="host" id="host" placeholder="transmission" required>
+
+    <label for="port">Port</label>
+    <input type="number" name="port" id="port" value="9091" required>
+
+    <label for="username">Username (optional)</label>
+    <input type="text" name="username" id="username">
+
+    <label for="password">Password (optional)</label>
+    <input type="text" name="password" id="password">
+
+    <label><input type="checkbox" name="stop_on_completion" checked> Stop on completion</label>
+    <label><input type="checkbox" name="remove_after_copy" checked> Remove after copy</label>
+
+    <button type="submit">Add</button>
+  </form>
+  {% else %}
+  <p style="color: var(--text-dim);">Add an app first -- a download client belongs to one app, the same way it does in Radarr/Sonarr itself.</p>
+  {% endif %}
+</div>
+{% endblock %}

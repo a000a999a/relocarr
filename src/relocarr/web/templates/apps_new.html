@@ -1,9 +1,10 @@
 {% extends "base.html" %}
-{% block nav_apps %}active{% endblock %}
+{% block nav_settings %}active{% endblock %}
+{% block nav_settings_add_app %}active{% endblock %}
 {% block content %}
 <h1>Add an app</h1>
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
-<form method="post" action="/apps/new">
+<form method="post" action="/settings/apps/new">
   <label for="kind">Type</label>
   <select name="kind" id="kind">
     <option value="radarr" {% if values.kind == 'radarr' %}selected{% endif %}>Radarr</option>

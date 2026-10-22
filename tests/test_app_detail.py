@@ -29,7 +29,7 @@ def _insert_app(staging_root: str, kind: str = "radarr") -> int:
 
 
 def test_app_detail_404_for_unknown_app(client):
-    resp = client.get("/apps/999")
+    resp = client.get("/settings/apps/999")
     assert resp.status_code == 404
 
 
@@ -38,7 +38,7 @@ def test_app_detail_shows_error_for_same_path_as_staging(client, tmp_path):
     with session(app_settings.db_path) as conn:
         conn.execute("UPDATE apps SET target_root = ? WHERE id = ?", (str(tmp_path), app_id))
 
-    resp = client.get(f"/apps/{app_id}")
+    resp = client.get(f"/settings/apps/{app_id}")
     assert resp.status_code == 200
     assert "must not be the same path" in resp.text
 
@@ -52,7 +52,7 @@ def test_app_detail_shows_ok_for_valid_distinct_target(client, tmp_path):
     with session(app_settings.db_path) as conn:
         conn.execute("UPDATE apps SET target_root = ? WHERE id = ?", (str(target), app_id))
 
-    resp = client.get(f"/apps/{app_id}")
+    resp = client.get(f"/settings/apps/{app_id}")
     assert "OK -- exists, writable, distinct from staging" in resp.text
 
 
@@ -64,7 +64,7 @@ def test_update_app_persists_fields(client, tmp_path):
     app_id = _insert_app(str(staging))
 
     resp = client.post(
-        f"/apps/{app_id}",
+        f"/settings/apps/{app_id}",
         data={
             "target_root": str(target),
             "layout_mode": "preserve",
@@ -87,7 +87,7 @@ def test_update_app_persists_fields(client, tmp_path):
 def test_update_app_blank_max_size_means_unlimited(client, tmp_path):
     app_id = _insert_app(str(tmp_path))
     client.post(
-        f"/apps/{app_id}",
+        f"/settings/apps/{app_id}",
         data={"target_root": "", "layout_mode": "flat", "max_file_size_gb": "", "conflict_policy": "skip"},
     )
     with session(app_settings.db_path) as conn:
@@ -98,7 +98,7 @@ def test_update_app_blank_max_size_means_unlimited(client, tmp_path):
 def test_add_download_client(client, tmp_path):
     app_id = _insert_app(str(tmp_path))
     resp = client.post(
-        f"/apps/{app_id}/download-client",
+        f"/settings/apps/{app_id}/download-client",
         data={
             "host": "transmission",
             "port": "9091",
@@ -127,7 +127,7 @@ def test_delete_download_client_removes_it(client, tmp_path):
             (app_id,),
         ).lastrowid
 
-    resp = client.post(f"/apps/{app_id}/download-client/{dc_id}/delete", follow_redirects=False)
+    resp = client.post(f"/settings/apps/{app_id}/download-client/{dc_id}/delete", follow_redirects=False)
     assert resp.status_code == 303
 
     with session(app_settings.db_path) as conn:
@@ -143,7 +143,7 @@ def test_update_connection_succeeds_and_saves(client, tmp_path):
     )
 
     resp = client.post(
-        f"/apps/{app_id}/connection",
+        f"/settings/apps/{app_id}/connection",
         data={"base_url": "http://new-radarr:7878", "api_key": "newkey"},
         follow_redirects=False,
     )
@@ -159,7 +159,7 @@ def test_update_connection_failure_does_not_save(client, tmp_path):
     app_id = _insert_app(str(tmp_path))
 
     resp = client.post(
-        f"/apps/{app_id}/connection",
+        f"/settings/apps/{app_id}/connection",
         data={"base_url": "http://unreachable-host-xyz:7878", "api_key": "newkey"},
     )
     assert resp.status_code == 200

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block nav_settings %}active{% endblock %}
+{% block nav_settings_app_config %}active{% endblock %}
+{% block content %}
+<h1>App Config</h1>
+
+{% if apps %}
+<table>
+  <tr><th>App</th><th>Type</th><th>Staging</th><th>Target</th><th>Layout</th></tr>
+  {% for app in apps %}
+  <tr>
+    <td><a href="/settings/apps/{{ app.id }}" style="color: var(--accent); text-decoration: none;">{{ app.name }}</a></td>
+    <td>{{ app.kind }}</td>
+    <td>{{ app.staging_root }}</td>
+    <td>{{ app.target_root or "(not set)" }}</td>
+    <td>{{ app.layout_mode }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p style="margin-top: 16px;"><a href="/settings/apps/new" style="color: var(--accent);">+ Add another app</a></p>
+{% else %}
+<div class="card empty-state">
+  No apps configured yet. <a href="/settings/apps/new" style="color: var(--accent);">Add a Radarr or Sonarr instance</a> to get started.
+</div>
+{% endif %}
+{% endblock %}

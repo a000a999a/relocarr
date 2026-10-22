@@ -1,6 +1,8 @@
 {% extends "base.html" %}
+{% block nav_settings %}active{% endblock %}
+{% block nav_settings_app_config %}active{% endblock %}
 {% block content %}
-<h1>Preflight -- {{ app.name }}</h1>
+<h1>Preflight -- {{ app.name }} <a href="/settings/apps/{{ app.id }}" style="font-size: 13px; color: var(--accent); margin-left: 12px;">&larr; back to app</a></h1>
 
 {% if fetch_error %}
 <div class="card">

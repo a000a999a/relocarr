@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block nav_system %}active{% endblock %}
+{% block content %}
+<h1>System</h1>
+
+<h1 style="font-size: 16px; margin-bottom: 8px;">Health</h1>
+{% if health %}
+<table>
+  <tr><th>Message</th></tr>
+  {% for item in health %}
+  <tr><td style="color: {% if item.level == 'error' %}var(--btn-danger){% else %}#e0a84e{% endif %};">{{ item.message }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="card empty-state" style="padding: 16px 0;">No issues.</div>
+{% endif %}
+
+<h1 style="font-size: 16px; margin: 24px 0 8px;">Disk Space</h1>
+{% if disk_space %}
+<table>
+  <tr><th>Location</th><th>Path</th><th>Free</th><th>Total</th><th style="width: 160px;"></th></tr>
+  {% for d in disk_space %}
+  <tr>
+    <td>{{ d.label }}</td>
+    <td style="font-size: 12px;">{{ d.path }}</td>
+    {% if d.ok %}
+    <td>{{ (d.free / (1024**3)) | round(1) }} GiB</td>
+    <td>{{ (d.total / (1024**3)) | round(1) }} GiB</td>
+    <td>
+      <div style="background: var(--bg-input); border-radius: 3px; height: 10px; overflow: hidden;">
+        <div style="background: var(--accent); height: 100%; width: {{ (100 - (d.free / d.total * 100)) | round(0) }}%;"></div>
+      </div>
+    </td>
+    {% else %}
+    <td colspan="3" style="color: var(--btn-danger);">{{ d.error }}</td>
+    {% endif %}
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="card empty-state" style="padding: 16px 0;">No paths configured yet.</div>
+{% endif %}
+
+<h1 style="font-size: 16px; margin: 24px 0 8px;">About</h1>
+<table>
+  <tr><td style="color: var(--text-dim); width: 180px;">Version</td><td>{{ version }}</td></tr>
+  <tr><td style="color: var(--text-dim);">Database</td><td>Sqlite -- {{ db_path }}</td></tr>
+  <tr><td style="color: var(--text-dim);">Docker</td><td>{{ "Yes" if in_docker else "No" }}</td></tr>
+  <tr><td style="color: var(--text-dim);">Uptime</td><td>{{ uptime_seconds // 3600 }}h {{ (uptime_seconds % 3600) // 60 }}m</td></tr>
+  <tr><td style="color: var(--text-dim);">Apps configured</td><td>{{ app_count }}</td></tr>
+  <tr><td style="color: var(--text-dim);">Open jobs</td><td><a href="/jobs" style="color: var(--accent);">{{ open_jobs }}</a></td></tr>
+</table>
+{% endblock %}

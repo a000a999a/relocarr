@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block nav_settings %}active{% endblock %}
+{% block nav_settings_general %}active{% endblock %}
 {% block content %}
-<h1>Settings</h1>
-<form method="post" action="/settings">
+<h1>General</h1>
+<form method="post" action="/settings/general">
   <label><input type="checkbox" name="dry_run" {% if settings.dry_run == 'true' %}checked{% endif %}> Dry run (log actions, perform none)</label>
 
   <label for="poll_interval_seconds">Poll interval (seconds)</label>

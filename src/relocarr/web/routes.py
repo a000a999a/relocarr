@@ -1,13 +1,14 @@
 import os
 import secrets
 import shutil
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from .. import arr
+from .. import VERSION, arr
 from ..arr.payloads import parse_radarr_webhook, parse_sonarr_webhook
 from ..arr.preflight import evaluate_preflight
 from ..config import settings
@@ -19,6 +20,8 @@ router = APIRouter()
 templates = Jinja2Templates(directory="src/relocarr/web/templates")
 
 _PARSERS = {"radarr": parse_radarr_webhook, "sonarr": parse_sonarr_webhook}
+
+START_TIME = time.monotonic()
 
 
 def _check_target_folder(staging_root: str, target_root: str) -> str | None:
@@ -45,24 +48,39 @@ def _check_target_folder(staging_root: str, target_root: str) -> str | None:
     return None
 
 
+# ----------------------------------------------------------------------
+# Default landing page
+# ----------------------------------------------------------------------
+
+
 @router.get("/")
-def dashboard(request: Request):
+def root():
+    return RedirectResponse("/log", status_code=307)
+
+
+# ----------------------------------------------------------------------
+# Settings > Add App, App Config (was the top-level Dashboard/Add App)
+# ----------------------------------------------------------------------
+
+
+@router.get("/settings")
+def settings_root():
+    return RedirectResponse("/settings/apps", status_code=307)
+
+
+@router.get("/settings/apps")
+def app_config_list(request: Request):
     with session(settings.db_path) as conn:
         apps = conn.execute("SELECT * FROM apps ORDER BY name").fetchall()
-        open_jobs = conn.execute(
-            "SELECT COUNT(*) AS n FROM jobs WHERE state NOT IN ('DONE', 'SKIPPED')"
-        ).fetchone()["n"]
-    return templates.TemplateResponse(
-        request, "index.html", {"apps": apps, "open_jobs": open_jobs}
-    )
+    return templates.TemplateResponse(request, "settings_apps.html", {"apps": apps})
 
 
-@router.get("/apps/new")
+@router.get("/settings/apps/new")
 def apps_new_form(request: Request):
     return templates.TemplateResponse(request, "apps_new.html", {"error": None, "values": {}})
 
 
-@router.post("/apps/new")
+@router.post("/settings/apps/new")
 def apps_new_submit(
     request: Request,
     kind: str = Form(...),
@@ -83,7 +101,7 @@ def apps_new_submit(
     root_folders = client.list_root_folders()
     webhook_token = secrets.token_urlsafe(32)
     with session(settings.db_path) as conn:
-        conn.execute(
+        new_id = conn.execute(
             """INSERT INTO apps (kind, name, base_url, api_key, webhook_token, staging_root, target_root)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
@@ -95,11 +113,11 @@ def apps_new_submit(
                 root_folders[0].path if root_folders else "",
                 "",
             ),
-        )
-    return RedirectResponse("/", status_code=303)
+        ).lastrowid
+    return RedirectResponse(f"/settings/apps/{new_id}", status_code=303)
 
 
-@router.get("/apps/{app_id}")
+@router.get("/settings/apps/{app_id}")
 def app_detail(request: Request, app_id: int):
     with session(settings.db_path) as conn:
         app = conn.execute("SELECT * FROM apps WHERE id = ?", (app_id,)).fetchone()
@@ -124,7 +142,7 @@ def app_detail(request: Request, app_id: int):
     )
 
 
-@router.post("/apps/{app_id}/connection")
+@router.post("/settings/apps/{app_id}/connection")
 def app_connection_submit(
     request: Request,
     app_id: int,
@@ -164,10 +182,10 @@ def app_connection_submit(
         conn.execute(
             "UPDATE apps SET base_url = ?, api_key = ? WHERE id = ?", (base_url, api_key, app_id)
         )
-    return RedirectResponse(f"/apps/{app_id}", status_code=303)
+    return RedirectResponse(f"/settings/apps/{app_id}", status_code=303)
 
 
-@router.post("/apps/{app_id}")
+@router.post("/settings/apps/{app_id}")
 def app_detail_submit(
     request: Request,
     app_id: int,
@@ -189,48 +207,10 @@ def app_detail_submit(
                WHERE id = ?""",
             (target_root, layout_mode, max_file_size_bytes, conflict_policy, app_id),
         )
-    return RedirectResponse(f"/apps/{app_id}", status_code=303)
+    return RedirectResponse(f"/settings/apps/{app_id}", status_code=303)
 
 
-@router.post("/apps/{app_id}/download-client")
-def add_download_client(
-    request: Request,
-    app_id: int,
-    host: str = Form(...),
-    port: int = Form(...),
-    username: str = Form(""),
-    password: str = Form(""),
-    stop_on_completion: str | None = Form(None),
-    remove_after_copy: str | None = Form(None),
-):
-    with session(settings.db_path) as conn:
-        conn.execute(
-            """INSERT INTO download_clients
-               (app_id, kind, host, port, username, password, stop_on_completion, remove_after_copy)
-               VALUES (?, 'transmission', ?, ?, ?, ?, ?, ?)""",
-            (
-                app_id,
-                host,
-                port,
-                username or None,
-                password or None,
-                1 if stop_on_completion else 0,
-                1 if remove_after_copy else 0,
-            ),
-        )
-    return RedirectResponse(f"/apps/{app_id}", status_code=303)
-
-
-@router.post("/apps/{app_id}/download-client/{dc_id}/delete")
-def delete_download_client(app_id: int, dc_id: int):
-    with session(settings.db_path) as conn:
-        conn.execute(
-            "DELETE FROM download_clients WHERE id = ? AND app_id = ?", (dc_id, app_id)
-        )
-    return RedirectResponse(f"/apps/{app_id}", status_code=303)
-
-
-@router.get("/apps/{app_id}/preflight")
+@router.get("/settings/apps/{app_id}/preflight")
 def app_preflight(request: Request, app_id: int):
     """Section 10's preflight page: live checklist of the *arr's settings."""
     with session(settings.db_path) as conn:
@@ -260,6 +240,149 @@ def app_preflight(request: Request, app_id: int):
     return templates.TemplateResponse(
         request, "preflight.html", {"app": app, "checks": checks, "fetch_error": None}
     )
+
+
+@router.post("/settings/apps/{app_id}/download-client")
+def add_download_client(
+    request: Request,
+    app_id: int,
+    host: str = Form(...),
+    port: int = Form(...),
+    username: str = Form(""),
+    password: str = Form(""),
+    stop_on_completion: str | None = Form(None),
+    remove_after_copy: str | None = Form(None),
+):
+    with session(settings.db_path) as conn:
+        conn.execute(
+            """INSERT INTO download_clients
+               (app_id, kind, host, port, username, password, stop_on_completion, remove_after_copy)
+               VALUES (?, 'transmission', ?, ?, ?, ?, ?, ?)""",
+            (
+                app_id,
+                host,
+                port,
+                username or None,
+                password or None,
+                1 if stop_on_completion else 0,
+                1 if remove_after_copy else 0,
+            ),
+        )
+    return RedirectResponse(f"/settings/apps/{app_id}", status_code=303)
+
+
+@router.post("/settings/apps/{app_id}/download-client/{dc_id}/delete")
+def delete_download_client(app_id: int, dc_id: int):
+    with session(settings.db_path) as conn:
+        conn.execute(
+            "DELETE FROM download_clients WHERE id = ? AND app_id = ?", (dc_id, app_id)
+        )
+    return RedirectResponse(f"/settings/apps/{app_id}", status_code=303)
+
+
+# ----------------------------------------------------------------------
+# Settings > Download Clients -- aggregated, Radarr-style overview across
+# every app's client(s). Reuses the same add/delete routes above (clients
+# are scoped to an app in the data model, same as the *arr itself scopes
+# a download client to one instance) -- this page just also lets you add
+# one without already being on that app's own detail page, by picking the
+# app from a dropdown first.
+# ----------------------------------------------------------------------
+
+
+@router.get("/settings/download-clients")
+def download_clients_list(request: Request):
+    with session(settings.db_path) as conn:
+        clients = conn.execute(
+            """SELECT download_clients.*, apps.name AS app_name FROM download_clients
+               JOIN apps ON apps.id = download_clients.app_id
+               ORDER BY apps.name"""
+        ).fetchall()
+        apps = conn.execute("SELECT id, name FROM apps ORDER BY name").fetchall()
+    return templates.TemplateResponse(
+        request, "settings_download_clients.html", {"clients": clients, "apps": apps}
+    )
+
+
+@router.post("/settings/download-clients/new")
+def download_clients_new(
+    request: Request,
+    app_id: int = Form(...),
+    host: str = Form(...),
+    port: int = Form(...),
+    username: str = Form(""),
+    password: str = Form(""),
+    stop_on_completion: str | None = Form(None),
+    remove_after_copy: str | None = Form(None),
+):
+    with session(settings.db_path) as conn:
+        conn.execute(
+            """INSERT INTO download_clients
+               (app_id, kind, host, port, username, password, stop_on_completion, remove_after_copy)
+               VALUES (?, 'transmission', ?, ?, ?, ?, ?, ?)""",
+            (
+                app_id,
+                host,
+                port,
+                username or None,
+                password or None,
+                1 if stop_on_completion else 0,
+                1 if remove_after_copy else 0,
+            ),
+        )
+    return RedirectResponse("/settings/download-clients", status_code=303)
+
+
+@router.post("/settings/download-clients/{dc_id}/delete")
+def download_clients_delete(dc_id: int):
+    with session(settings.db_path) as conn:
+        conn.execute("DELETE FROM download_clients WHERE id = ?", (dc_id,))
+    return RedirectResponse("/settings/download-clients", status_code=303)
+
+
+# ----------------------------------------------------------------------
+# Settings > General (was the top-level /settings form)
+# ----------------------------------------------------------------------
+
+
+@router.get("/settings/general")
+def settings_general_form(request: Request):
+    with session(settings.db_path) as conn:
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    return templates.TemplateResponse(
+        request, "settings_general.html", {"settings": {r["key"]: r["value"] for r in rows}}
+    )
+
+
+@router.post("/settings/general")
+def settings_general_submit(
+    request: Request,
+    dry_run: str | None = Form(None),
+    poll_interval_seconds: str = Form(...),
+    sidecar_extensions: str = Form(...),
+    verify_mode: str = Form(...),
+):
+    values = {
+        "dry_run": "true" if dry_run else "false",
+        "poll_interval_seconds": poll_interval_seconds,
+        "sidecar_extensions": sidecar_extensions,
+        "verify_mode": verify_mode,
+    }
+    with session(settings.db_path) as conn:
+        for key, value in values.items():
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+    return RedirectResponse("/settings/general", status_code=303)
+
+
+# ----------------------------------------------------------------------
+# Webhook (external-facing -- the *arr calls this. URL unchanged, never
+# move this: it's already configured as a live Webhook connection URL in
+# production *arr instances)
+# ----------------------------------------------------------------------
 
 
 @router.post("/webhook/{app_id}")
@@ -329,6 +452,11 @@ def webhook(
     return {"jobs_created": created}
 
 
+# ----------------------------------------------------------------------
+# Jobs, Log (top-level -- operational views, not configuration)
+# ----------------------------------------------------------------------
+
+
 @router.get("/jobs")
 def jobs_list(request: Request):
     with session(settings.db_path) as conn:
@@ -385,34 +513,67 @@ def job_skip(job_id: int):
     return RedirectResponse("/jobs", status_code=303)
 
 
-@router.get("/settings")
-def settings_form(request: Request):
-    with session(settings.db_path) as conn:
-        rows = conn.execute("SELECT key, value FROM settings").fetchall()
-    return templates.TemplateResponse(
-        request, "settings.html", {"settings": {r["key"]: r["value"] for r in rows}}
-    )
+# ----------------------------------------------------------------------
+# System (modeled on Radarr's System > Status page)
+# ----------------------------------------------------------------------
 
 
-@router.post("/settings")
-def settings_submit(
-    request: Request,
-    dry_run: str | None = Form(None),
-    poll_interval_seconds: str = Form(...),
-    sidecar_extensions: str = Form(...),
-    verify_mode: str = Form(...),
-):
-    values = {
-        "dry_run": "true" if dry_run else "false",
-        "poll_interval_seconds": poll_interval_seconds,
-        "sidecar_extensions": sidecar_extensions,
-        "verify_mode": verify_mode,
-    }
+@router.get("/system")
+def system_status(request: Request):
     with session(settings.db_path) as conn:
-        for key, value in values.items():
-            conn.execute(
-                "INSERT INTO settings (key, value) VALUES (?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                (key, value),
+        apps = conn.execute("SELECT * FROM apps ORDER BY name").fetchall()
+        open_jobs = conn.execute(
+            "SELECT COUNT(*) AS n FROM jobs WHERE state NOT IN ('DONE', 'SKIPPED')"
+        ).fetchone()["n"]
+
+    health = []
+    if not apps:
+        health.append({"message": "No apps configured yet.", "level": "warning"})
+    for app in apps:
+        client = arr.make_app(app["kind"], app["base_url"], app["api_key"])
+        result = client.test_connection()
+        client.close()
+        if not result.ok:
+            health.append(
+                {"message": f"{app['name']}: unreachable -- {result.error}", "level": "error"}
             )
-    return RedirectResponse("/settings", status_code=303)
+
+    disk_space = []
+    seen_paths: set[str] = set()
+    for app in apps:
+        for label, path in (("staging", app["staging_root"]), ("target", app["target_root"])):
+            if not path or path in seen_paths:
+                continue
+            seen_paths.add(path)
+            try:
+                usage = shutil.disk_usage(path)
+                disk_space.append(
+                    {
+                        "path": path,
+                        "label": f"{app['name']} ({label})",
+                        "free": usage.free,
+                        "total": usage.total,
+                        "ok": True,
+                    }
+                )
+            except OSError as exc:
+                disk_space.append(
+                    {"path": path, "label": f"{app['name']} ({label})", "error": str(exc), "ok": False}
+                )
+
+    uptime_seconds = int(time.monotonic() - START_TIME)
+
+    return templates.TemplateResponse(
+        request,
+        "system.html",
+        {
+            "health": health,
+            "disk_space": disk_space,
+            "version": VERSION,
+            "db_path": str(settings.db_path),
+            "in_docker": Path("/.dockerenv").exists(),
+            "uptime_seconds": uptime_seconds,
+            "app_count": len(apps),
+            "open_jobs": open_jobs,
+        },
+    )
