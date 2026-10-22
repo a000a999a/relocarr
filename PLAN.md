@@ -370,11 +370,36 @@ relocarr/
 
 | Version | Scope |
 |---|---|
-| **v0.1 (MVP)** | Radarr + Sonarr, Transmission, webhook receiver, staging → destination with the `flat` and `preserve` layouts, size verification, retry when offline, reconcile + cleanup, removal gate, UI (setup, app detail, preflight, jobs), dry-run, Docker image. |
+| **v0.1 (MVP)** — **implemented 2026-10-21/22**, see below | Radarr + Sonarr, Transmission, webhook receiver, staging → destination with the `flat` and `preserve` layouts, size verification, retry when offline, reconcile + cleanup, removal gate, UI (setup, app detail, preflight, jobs), dry-run, Docker image. |
 | **v0.2** | Preflight check for Sonarr series/season folder collisions against the destination, Plex library scan, conflict/replace handling, *On Rename* handling, `adopt` command to flatten/import existing per-movie folders on the destination, path mapping, checksum verification, notifications (webhook/ntfy). |
 | **v0.3** | qBittorrent (and Deluge) adapter, seeding policy (seed to ratio/time before removal), Jellyfin/Emby notifications, usenet clients. |
 | **Later** | Lidarr/Readarr, multiple destinations, optional shadow-library mode. |
 | **Distribution (post-MVP, not before)** | AUR package (added to roadmap 2026-10-21) — once v0.1 has an actual tagged release to package. Precedent: Radarr/Sonarr themselves have native AUR packages as an alternative to their Docker images, running as a systemd service rather than wrapping the container. GitHub release + the planned Docker image (§17) remain the primary distribution path; AUR is an additional one for Arch users, not a replacement. |
+
+### v0.1 implementation status (2026-10-21/22)
+
+Built in one continuous session after the spikes above, culminating in an autonomous overnight
+continuation. Repo: https://github.com/a000a999a/relocarr, 6 commits (`8ecd2a2` through
+`7283cef`), 93 passing tests. Every v0.1 roadmap item above is implemented and exercised by
+tests; most were additionally smoke-tested live against the real local Radarr instance (adding
+the app, configuring target/layout/download-client through the actual forms, running the real
+Preflight page — which caught and fixed a genuine leftover misconfiguration from the manual
+migration earlier the same night) and the real Docker image (built, run, non-root/PUID-PGID
+confirmed via `/proc/1/status`, healthcheck confirmed transitioning to healthy).
+
+**Not yet done, deliberately left for the user:** an actual end-to-end run with `dry_run` turned
+off against the real Shield. Every individual piece has been verified against real systems, but
+no one has yet pointed a running relocarr instance at production with dry-run off and watched a
+real file move through the whole pipeline unattended. Recommended first step once reviewed:
+leave `dry_run` on, add the real webhook connection in Radarr pointing at a running relocarr
+instance, and watch the dry-run log output for a real import before flipping it off.
+
+Two real bugs were found and fixed *by* the process of building this, not just by writing
+tests: an rsync exit-code-23 ambiguity (shared between genuine transient failures and a simple
+missing source file — distinguished by rsync's `[sender]` error tag, see §12), and a real-world
+Radarr Plex-notification misconfiguration from earlier tonight's manual walkthrough (`onUpgrade`
+and `onMovieFileDeleteForUpgrade` were still enabled, caught by the new Preflight page and fixed
+live via the API).
 
 ## 16. Spikes to run before writing real code
 
