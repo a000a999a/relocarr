@@ -3,10 +3,20 @@
 Hands finished Radarr and Sonarr imports over to your NAS or custom layout, then cleans up the
 download client. See [PLAN.md](PLAN.md) for the full design and the rationale behind it.
 
-**Status: v0.1 feature-complete, not yet run against production with dry-run off.** Every piece
-(webhook receiver, job state machine, removal gate, download-client watcher, scheduler, Preflight
-page, Docker image) is implemented and tested — see PLAN.md's "v0.1 implementation status" under
-§15 for exactly what's been verified and what the recommended first real run looks like.
+**Status: v0.1.0 released, verified end-to-end against production.** Every piece (webhook
+receiver, job state machine, removal gate, download-client watcher, scheduler, Preflight page,
+Docker image) is implemented, tested, and has moved real files through the full pipeline —
+see PLAN.md's "v0.1 implementation status" under §15 for details.
+
+## Screenshots
+
+| Log | App Config |
+|---|---|
+| ![Transfer log](docs/screenshots/log.png) | ![App configuration](docs/screenshots/app-config.png) |
+
+| Download Clients | System |
+|---|---|
+| ![Download clients](docs/screenshots/download-clients.png) | ![System status](docs/screenshots/system.png) |
 
 ## Quick start
 
