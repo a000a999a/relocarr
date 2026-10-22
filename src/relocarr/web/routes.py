@@ -242,44 +242,6 @@ def app_preflight(request: Request, app_id: int):
     )
 
 
-@router.post("/settings/apps/{app_id}/download-client")
-def add_download_client(
-    request: Request,
-    app_id: int,
-    host: str = Form(...),
-    port: int = Form(...),
-    username: str = Form(""),
-    password: str = Form(""),
-    stop_on_completion: str | None = Form(None),
-    remove_after_copy: str | None = Form(None),
-):
-    with session(settings.db_path) as conn:
-        conn.execute(
-            """INSERT INTO download_clients
-               (app_id, kind, host, port, username, password, stop_on_completion, remove_after_copy)
-               VALUES (?, 'transmission', ?, ?, ?, ?, ?, ?)""",
-            (
-                app_id,
-                host,
-                port,
-                username or None,
-                password or None,
-                1 if stop_on_completion else 0,
-                1 if remove_after_copy else 0,
-            ),
-        )
-    return RedirectResponse(f"/settings/apps/{app_id}", status_code=303)
-
-
-@router.post("/settings/apps/{app_id}/download-client/{dc_id}/delete")
-def delete_download_client(app_id: int, dc_id: int):
-    with session(settings.db_path) as conn:
-        conn.execute(
-            "DELETE FROM download_clients WHERE id = ? AND app_id = ?", (dc_id, app_id)
-        )
-    return RedirectResponse(f"/settings/apps/{app_id}", status_code=303)
-
-
 # ----------------------------------------------------------------------
 # Settings > Download Clients -- aggregated, Radarr-style overview across
 # every app's client(s). Reuses the same add/delete routes above (clients

@@ -95,44 +95,25 @@ def test_update_app_blank_max_size_means_unlimited(client, tmp_path):
     assert app["max_file_size_bytes"] is None
 
 
-def test_add_download_client(client, tmp_path):
-    app_id = _insert_app(str(tmp_path))
-    resp = client.post(
-        f"/settings/apps/{app_id}/download-client",
-        data={
-            "host": "transmission",
-            "port": "9091",
-            "stop_on_completion": "on",
-            "remove_after_copy": "on",
-        },
-        follow_redirects=False,
-    )
-    assert resp.status_code == 303
-
-    with session(app_settings.db_path) as conn:
-        dc = conn.execute("SELECT * FROM download_clients WHERE app_id = ?", (app_id,)).fetchone()
-
-    assert dc["host"] == "transmission"
-    assert dc["port"] == 9091
-    assert dc["stop_on_completion"] == 1
-    assert dc["remove_after_copy"] == 1
-
-
-def test_delete_download_client_removes_it(client, tmp_path):
+def test_app_detail_shows_download_client_read_only(client, tmp_path):
+    # Adding/deleting a download client now only happens on the dedicated
+    # /settings/download-clients page (de-duplicated per user feedback,
+    # 2026-10-22 -- App Detail used to have its own separate add/delete
+    # form doing the exact same thing). This page just displays it.
     app_id = _insert_app(str(tmp_path))
     with session(app_settings.db_path) as conn:
-        dc_id = conn.execute(
+        conn.execute(
             """INSERT INTO download_clients (app_id, kind, host, port)
                VALUES (?, 'transmission', 'transmission', 9091)""",
             (app_id,),
-        ).lastrowid
+        )
 
-    resp = client.post(f"/settings/apps/{app_id}/download-client/{dc_id}/delete", follow_redirects=False)
-    assert resp.status_code == 303
-
-    with session(app_settings.db_path) as conn:
-        row = conn.execute("SELECT * FROM download_clients WHERE id = ?", (dc_id,)).fetchone()
-    assert row is None
+    resp = client.get(f"/settings/apps/{app_id}")
+    assert resp.status_code == 200
+    assert "transmission" in resp.text
+    assert "9091" in resp.text
+    assert "Add Transmission client" not in resp.text  # no leftover add form for the client here
+    assert 'href="/settings/download-clients"' in resp.text  # links to the one real place instead
 
 
 @respx.mock

@@ -72,10 +72,12 @@
 </div>
 
 <div class="card">
-  <h1 style="font-size: 16px; margin-bottom: 12px;">Download clients</h1>
+  <h1 style="font-size: 16px; margin-bottom: 12px;">Download clients
+    <a href="/settings/download-clients" style="font-size: 13px; font-weight: 400; color: var(--accent); margin-left: 8px;">manage &rarr;</a>
+  </h1>
   {% if download_clients %}
   <table>
-    <tr><th>Kind</th><th>Host</th><th>Port</th><th>Stop on completion</th><th>Remove after copy</th><th></th></tr>
+    <tr><th>Kind</th><th>Host</th><th>Port</th><th>Stop on completion</th><th>Remove after copy</th></tr>
     {% for dc in download_clients %}
     <tr>
       <td>{{ dc.kind }}</td>
@@ -83,36 +85,13 @@
       <td>{{ dc.port }}</td>
       <td>{{ "Yes" if dc.stop_on_completion else "No" }}</td>
       <td>{{ "Yes" if dc.remove_after_copy else "No" }}</td>
-      <td>
-        <form method="post" action="/settings/apps/{{ app.id }}/download-client/{{ dc.id }}/delete">
-          <button type="submit" style="margin-top:0; padding: 4px 10px; font-size: 12px; background: var(--btn-danger);">Delete</button>
-        </form>
-      </td>
     </tr>
     {% endfor %}
   </table>
   {% else %}
-  <p style="color: var(--text-dim);">No download client configured yet -- the SEALED/stop-on-completion step won't run until one is added.</p>
+  <p style="color: var(--text-dim);">No download client configured yet -- the SEALED/stop-on-completion step won't run until one is added on the
+    <a href="/settings/download-clients" style="color: var(--accent);">Download Clients</a> page.</p>
   {% endif %}
-
-  <form method="post" action="/settings/apps/{{ app.id }}/download-client" style="margin-top: 16px;">
-    <label for="host">Host</label>
-    <input type="text" name="host" id="host" placeholder="transmission" required>
-
-    <label for="port">Port</label>
-    <input type="number" name="port" id="port" value="9091" required>
-
-    <label for="username">Username (optional)</label>
-    <input type="text" name="username" id="username">
-
-    <label for="password">Password (optional)</label>
-    <input type="text" name="password" id="password">
-
-    <label><input type="checkbox" name="stop_on_completion" checked> Stop on completion</label>
-    <label><input type="checkbox" name="remove_after_copy" checked> Remove after copy</label>
-
-    <button type="submit">Add Transmission client</button>
-  </form>
 </div>
 
 <div class="card">
