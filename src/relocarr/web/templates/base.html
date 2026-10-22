@@ -43,7 +43,7 @@
     color: var(--accent);
     letter-spacing: 0.5px;
   }
-  nav.sidebar .logo span.mark { color: var(--accent); font-size: 22px; }
+  nav.sidebar .logo img { border-radius: 4px; flex-shrink: 0; }
   nav.sidebar a {
     display: block;
     padding: 10px 20px;
@@ -80,7 +80,7 @@
 </head>
 <body>
   <nav class="sidebar">
-    <div class="logo"><span class="mark">&#9654;</span> RELOCARR</div>
+    <div class="logo"><img src="/static/favicon.svg" width="24" height="24" alt=""> RELOCARR</div>
     <a href="/log" class="{% block nav_log %}{% endblock %}">Log</a>
     <a href="/jobs" class="{% block nav_jobs %}{% endblock %}">Jobs</a>
     <a href="/settings/apps" class="{% block nav_settings %}{% endblock %}">Settings</a>
