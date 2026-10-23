@@ -12,3 +12,5 @@ venv/
 .env
 dist/
 build/
+docker-compose.override.yml
+.env.bak.*

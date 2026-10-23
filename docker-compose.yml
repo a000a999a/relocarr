@@ -1,0 +1,14 @@
+services:
+  relocarr:
+    build: .
+    container_name: relocarr
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+    volumes:
+      - ./config:/config
+      - ${DOWNLOADS_PATH}:${DOWNLOADS_PATH}
+      - ${MEDIA_PATH}:${MEDIA_PATH}
+    ports:
+      - "${RELOCARR_PORT:-8686}:8686"
