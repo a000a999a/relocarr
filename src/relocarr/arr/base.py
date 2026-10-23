@@ -38,6 +38,27 @@ class NotificationSettings:
 
 
 @dataclass
+class QualityProfile:
+    id: int
+    name: str
+
+
+@dataclass
+class MovieMatch:
+    """A Radarr movie, however we found it -- by its current file's path,
+    or by title/year for one relocarr (or the user) has already unmonitored
+    and whose file is gone. See RadarrApp.build_movie_index.
+    """
+
+    movie_id: int
+    movie_file_id: int | None
+    quality_profile_id: int
+    title: str
+    monitored: bool
+    has_file: bool
+
+
+@dataclass
 class PreflightData:
     """Raw settings the Section 10 preflight checklist is evaluated
     against. One real API call per field, all confirmed live against

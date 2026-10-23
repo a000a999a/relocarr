@@ -1,6 +1,6 @@
 from relocarr.config import settings as app_settings
 from relocarr.db import init_db, session
-from relocarr.library import scan_movie_files
+from relocarr.library import parse_title_year, scan_movie_files
 
 
 def _insert_app(db_path, kind: str, target_root: str, name: str | None = None):
@@ -84,3 +84,19 @@ def test_scan_movie_files_dedupes_apps_sharing_a_target_root(tmp_path):
 
     files = scan_movie_files(apps)
     assert len(files) == 1
+
+
+def test_parse_title_year_extracts_title_and_year():
+    assert parse_title_year("Example Feature (1982).mkv") == ("Example Feature", 1982)
+
+
+def test_parse_title_year_handles_mp4():
+    assert parse_title_year("Nature Documentary (2020).mp4") == ("Nature Documentary", 2020)
+
+
+def test_parse_title_year_returns_none_without_a_year():
+    assert parse_title_year("Some Movie.mkv") is None
+
+
+def test_parse_title_year_returns_none_for_malformed_name():
+    assert parse_title_year("1982.mkv") is None

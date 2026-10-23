@@ -5,8 +5,10 @@ import httpx
 from .base import (
     ConnectionTestResult,
     DownloadClientSettings,
+    MovieMatch,
     NotificationSettings,
     PreflightData,
+    QualityProfile,
     QueueEntry,
     RootFolder,
 )
@@ -129,6 +131,126 @@ class RadarrApp:
                 for n in notif_list
             ],
             webhook_configured=any(n["implementation"] == "Webhook" for n in notif_list),
+        )
+
+    def list_quality_profiles(self) -> list[QualityProfile]:
+        resp = self._client.get("/api/v3/qualityprofile")
+        resp.raise_for_status()
+        return [QualityProfile(id=p["id"], name=p["name"]) for p in resp.json()]
+
+    def build_movie_index(self) -> tuple[dict[str, MovieMatch], dict[tuple[str, int | None], MovieMatch]]:
+        """One GET /api/v3/movie, indexed two ways, to resolve a filesystem
+        file back to the right Radarr action without one call per file:
+
+        - by_path: movies that currently have a file, keyed by that file's
+          path -- the only identifier a filesystem scan shares with what
+          Radarr reports (the whole design already requires the same path
+          to be visible to both, see PLAN.md Section 2). A hit here means
+          "delete this file and search" is the right move.
+        - by_title_year: every movie, found-with-a-file or not, keyed by
+          (lowercased title, year). A hit here with no corresponding
+          by_path entry means Radarr already knows this movie but has lost
+          track of its file -- exactly what relocarr's own unmonitor +
+          delete_file does once a transfer completes (PLAN.md Section 5) --
+          so the right move is to re-monitor and search, not delete+search.
+        """
+        resp = self._client.get("/api/v3/movie")
+        resp.raise_for_status()
+        by_path: dict[str, MovieMatch] = {}
+        by_title_year: dict[tuple[str, int | None], MovieMatch] = {}
+        for m in resp.json():
+            movie_file = m.get("movieFile")
+            match = MovieMatch(
+                movie_id=m["id"],
+                movie_file_id=movie_file["id"] if movie_file else None,
+                quality_profile_id=m["qualityProfileId"],
+                title=m.get("title", ""),
+                monitored=m.get("monitored", False),
+                has_file=bool(movie_file),
+            )
+            if movie_file:
+                by_path[movie_file["path"]] = match
+            by_title_year[(m.get("title", "").strip().lower(), m.get("year"))] = match
+        return by_path, by_title_year
+
+    def find_movie_by_file_path(self, path: str) -> MovieMatch | None:
+        by_path, _ = self.build_movie_index()
+        return by_path.get(path)
+
+    def _update_movie(self, movie_id: int, **fields) -> None:
+        movie_resp = self._client.get(f"/api/v3/movie/{movie_id}")
+        movie_resp.raise_for_status()
+        movie = movie_resp.json()
+        movie.update(fields)
+        put_resp = self._client.put(f"/api/v3/movie/{movie_id}", json=movie)
+        put_resp.raise_for_status()
+
+    def _trigger_search(self, movie_id: int) -> None:
+        resp = self._client.post("/api/v3/command", json={"name": "MoviesSearch", "movieIds": [movie_id]})
+        resp.raise_for_status()
+
+    def redownload_movie(
+        self, movie_id: int, movie_file_id: int | None, quality_profile_id: int | None = None
+    ) -> None:
+        """A movie Radarr currently has a file for: delete it and trigger a
+        fresh search -- the same net effect as deleting a movie's file in
+        Radarr's own UI and then searching for it. Deleting first, rather
+        than only searching, is deliberate: Radarr only replaces an
+        existing file when it judges a result a quality *upgrade*, and a
+        same-quality, smaller-size release typically isn't one -- a search
+        against a movie that still has a file can silently find nothing
+        to do.
+        """
+        if quality_profile_id is not None:
+            self._update_movie(movie_id, qualityProfileId=quality_profile_id)
+        if movie_file_id is not None:
+            self.delete_file(str(movie_file_id))
+        self._trigger_search(movie_id)
+
+    def monitor_and_search(self, movie_id: int, quality_profile_id: int | None = None) -> None:
+        """A movie Radarr already knows about but has lost its file for --
+        typically relocarr's own earlier unmonitor + delete_file, once a
+        transfer completed (PLAN.md Section 5). There's no file left to
+        delete; re-monitoring it is what makes Radarr consider it missing
+        and worth searching for again.
+        """
+        fields = {"monitored": True}
+        if quality_profile_id is not None:
+            fields["qualityProfileId"] = quality_profile_id
+        self._update_movie(movie_id, **fields)
+        self._trigger_search(movie_id)
+
+    def lookup_and_add(
+        self, title: str, year: int, quality_profile_id: int, root_folder_path: str
+    ) -> MovieMatch | None:
+        """A file Radarr has never tracked at all -- most of a library that
+        predates it. Looks the title/year up the same way Radarr's own "Add
+        New" search does, adds it monitored with a search queued
+        immediately, and returns the created movie, or None if the lookup
+        found nothing. The caller is responsible for choosing a sane
+        `quality_profile_id` -- there's no existing one to fall back to.
+        """
+        lookup_resp = self._client.get("/api/v3/movie/lookup", params={"term": f"{title} {year}"})
+        lookup_resp.raise_for_status()
+        results = lookup_resp.json()
+        candidate = next((m for m in results if m.get("year") == year), results[0] if results else None)
+        if candidate is None:
+            return None
+
+        candidate["qualityProfileId"] = quality_profile_id
+        candidate["rootFolderPath"] = root_folder_path
+        candidate["monitored"] = True
+        candidate["addOptions"] = {"searchForMovie": True}
+        add_resp = self._client.post("/api/v3/movie", json=candidate)
+        add_resp.raise_for_status()
+        added = add_resp.json()
+        return MovieMatch(
+            movie_id=added["id"],
+            movie_file_id=None,
+            quality_profile_id=added["qualityProfileId"],
+            title=added.get("title", title),
+            monitored=True,
+            has_file=False,
         )
 
     def close(self) -> None:

@@ -1,10 +1,13 @@
+import logging
 import os
 import secrets
 import shutil
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
+import httpx
 from fastapi import APIRouter, Form, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -15,8 +18,11 @@ from ..arr.preflight import evaluate_preflight
 from ..config import settings
 from ..db import session
 from ..library import cache as movie_library_cache
+from ..library import parse_title_year
 from ..transfer.layout import compute_target_path
 from ..transfer.safety import PathSafetyError, assert_distinct_roots
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="src/relocarr/web/templates")
@@ -447,8 +453,76 @@ def _size_bucket_bounds() -> list[tuple[float, float | None]]:
     return bounds
 
 
+def _classify_redownload(
+    file: dict, by_path: dict, by_title_year: dict
+) -> tuple[str, object | None]:
+    """Which of the three redownload actions applies to a scanned file:
+    - "replace": Radarr still has this exact file tracked -- delete + search.
+    - "remonitor": Radarr knows the movie (by title/year) but has lost the
+      file -- typically relocarr's own earlier unmonitor + delete_file once
+      that transfer completed. Re-monitor + search, nothing to delete.
+    - "add": no Radarr record at all -- most of a library that predates it.
+      Needs Radarr's lookup API and a quality profile the caller picks.
+    - "unknown": filename doesn't match "Title (Year).ext", so there's no
+      reliable term to search Radarr with.
+    Returns (action, match-or-None); match is only present for the first two.
+    """
+    match = by_path.get(file.get("path"))
+    if match is not None:
+        return "replace", match
+    parsed = parse_title_year(file.get("name", ""))
+    if parsed is not None:
+        match = by_title_year.get((parsed[0].lower(), parsed[1]))
+        if match is not None:
+            return "remonitor", match
+        return "add", None
+    return "unknown", None
+
+
+def _enrich_with_radarr_matches(apps, files: list[dict]) -> None:
+    """Mutates each file dict in place, adding `redownload_action` (one of
+    "replace"/"remonitor"/"add"/"unknown", see _classify_redownload),
+    `movie_match` (the Radarr MovieMatch, for "replace"/"remonitor"), and
+    `quality_profiles` (that app's list, for the Redownload form's picker).
+    One GET /api/v3/movie + one GET /api/v3/qualityprofile per distinct app
+    involved, not one per file.
+    """
+    apps_by_id = {a["id"]: a for a in apps}
+    indexes_by_app: dict[int, tuple[dict, dict]] = {}
+    profiles_by_app: dict[int, list] = {}
+    for f in files:
+        app_id = f.get("app_id")
+        if app_id not in indexes_by_app:
+            app_row = apps_by_id.get(app_id)
+            if app_row is None or app_row["kind"] != "radarr":
+                indexes_by_app[app_id] = ({}, {})
+                profiles_by_app[app_id] = []
+                continue
+            client = arr.RadarrApp(app_row["base_url"], app_row["api_key"])
+            try:
+                indexes_by_app[app_id] = client.build_movie_index()
+                profiles_by_app[app_id] = client.list_quality_profiles()
+            except httpx.HTTPError:
+                logger.exception("could not reach Radarr app %r to match library files", app_id)
+                indexes_by_app[app_id] = ({}, {})
+                profiles_by_app[app_id] = []
+            finally:
+                client.close()
+        by_path, by_title_year = indexes_by_app[app_id]
+        action, match = _classify_redownload(f, by_path, by_title_year)
+        f["redownload_action"] = action
+        f["movie_match"] = match
+        f["quality_profiles"] = profiles_by_app[app_id]
+
+
 @router.get("/log")
-def transfer_log(request: Request, min_gb: float | None = None, max_gb: float | None = None):
+def transfer_log(
+    request: Request,
+    min_gb: float | None = None,
+    max_gb: float | None = None,
+    redownload_error: str | None = None,
+    redownload_result: str | None = None,
+):
     """Historical record of finished transfer attempts -- success
     (DONE), failed (NEEDS_ATTENTION), or skipped (SKIPPED) -- each with the
     timestamp it reached that state. In-flight jobs (IMPORTED through
@@ -460,7 +534,9 @@ def transfer_log(request: Request, min_gb: float | None = None, max_gb: float | 
     filesystem, not from job history (which only has entries for files
     relocarr itself moved, a small fraction of a library that likely
     existed before relocarr did). Each bucket is a non-overlapping
-    (min_gb, max_gb] band; ?min_gb=&max_gb= filters the file list to one.
+    (min_gb, max_gb] band; ?min_gb=&max_gb= filters the file list to one,
+    and each file in that list can be sent back to Radarr for a fresh,
+    smaller-release search (POST /log/redownload[-bulk]).
     """
     with session(settings.db_path) as conn:
         apps = conn.execute("SELECT * FROM apps").fetchall()
@@ -499,6 +575,8 @@ def transfer_log(request: Request, min_gb: float | None = None, max_gb: float | 
             key=lambda f: f["size_bytes"],
             reverse=True,
         )
+        if filtered_movie_files:
+            _enrich_with_radarr_matches(apps, filtered_movie_files)
 
     capacity_projection = []
     seen_target_roots: set[str] = set()
@@ -530,6 +608,8 @@ def transfer_log(request: Request, min_gb: float | None = None, max_gb: float | 
             "min_gb": min_gb,
             "max_gb": max_gb,
             "filtered_movie_files": filtered_movie_files,
+            "redownload_error": redownload_error,
+            "redownload_result": redownload_result,
             "library_scanned_at": (
                 datetime.fromtimestamp(movie_library_cache.scanned_at).strftime("%Y-%m-%d %H:%M:%S")
                 if movie_library_cache.scanned_at
@@ -537,6 +617,163 @@ def transfer_log(request: Request, min_gb: float | None = None, max_gb: float | 
             ),
         },
     )
+
+
+def _apply_redownload(
+    client: arr.RadarrApp,
+    root_folder_path: str,
+    file: dict,
+    by_path: dict,
+    by_title_year: dict,
+    quality_profile_id: int | None,
+) -> str:
+    """Classifies one file (see _classify_redownload) and performs the
+    matching Radarr action, returning a short human-readable outcome.
+    Raises ValueError -- caught by the callers, never lets one bad file
+    abort a bulk batch -- when there's nothing sensible to do: the
+    filename doesn't parse to a title/year, or it's a brand-new addition
+    and no quality profile was given (there's no existing one to fall
+    back to, unlike the other two actions).
+    """
+    action, match = _classify_redownload(file, by_path, by_title_year)
+    name = file.get("name") or file.get("path", "")
+
+    if action == "replace":
+        client.redownload_movie(match.movie_id, match.movie_file_id, quality_profile_id)
+        return f"redownloaded {match.title or name}"
+
+    if action == "remonitor":
+        client.monitor_and_search(match.movie_id, quality_profile_id)
+        return f"re-monitored and searched {match.title or name}"
+
+    if action == "add":
+        if quality_profile_id is None:
+            raise ValueError(f'"{name}" needs a quality profile picked -- Radarr never tracked it before')
+        title, year = parse_title_year(name)
+        added = client.lookup_and_add(title, year, quality_profile_id, root_folder_path)
+        if added is None:
+            raise ValueError(f'"{name}": no Radarr lookup match for "{title} ({year})"')
+        return f"added and searched {added.title}"
+
+    raise ValueError(f'"{name}": cannot tell its title/year from the filename')
+
+
+def _log_redirect_url(
+    min_gb: float | None, max_gb: float | None, *, error: str | None = None, result: str | None = None
+) -> str:
+    params = []
+    if min_gb is not None:
+        params.append(f"min_gb={min_gb}")
+    if max_gb is not None:
+        params.append(f"max_gb={max_gb}")
+    if error:
+        params.append(f"redownload_error={quote(error)}")
+    if result:
+        params.append(f"redownload_result={quote(result)}")
+    return "/log" + ("?" + "&".join(params) if params else "")
+
+
+@router.post("/log/redownload")
+def log_redownload(
+    app_id: int = Form(...),
+    path: str = Form(...),
+    name: str = Form(...),
+    quality_profile_id: str = Form(""),
+    min_gb: float | None = Form(None),
+    max_gb: float | None = Form(None),
+):
+    """The Log page's per-file Redownload button. Depending on what Radarr
+    currently knows about this file (see _classify_redownload): deletes a
+    still-tracked file and searches, re-monitors a movie whose file Radarr
+    already lost track of (relocarr's own earlier cleanup, typically), or
+    looks the title up and adds it fresh -- same three cases as the bulk
+    version below. An explicit, one-off user click -- unlike the automated
+    import pipeline, this is NOT gated by the dry_run setting, the same way
+    /jobs/{id}/retry and /skip aren't.
+    """
+    with session(settings.db_path) as conn:
+        app = conn.execute("SELECT * FROM apps WHERE id = ? AND kind = 'radarr'", (app_id,)).fetchone()
+    if app is None:
+        raise HTTPException(status_code=404, detail="app not found")
+
+    profile_id = int(quality_profile_id) if quality_profile_id else None
+    client = arr.RadarrApp(app["base_url"], app["api_key"])
+    try:
+        by_path, by_title_year = client.build_movie_index()
+        outcome = _apply_redownload(
+            client, app["staging_root"], {"path": path, "name": name}, by_path, by_title_year, profile_id
+        )
+    except ValueError as exc:
+        return RedirectResponse(_log_redirect_url(min_gb, max_gb, error=str(exc)), status_code=303)
+    except httpx.HTTPError:
+        logger.exception("redownload failed for app %r, path %r", app_id, path)
+        return RedirectResponse(
+            _log_redirect_url(min_gb, max_gb, error="Could not reach Radarr -- see the server log."),
+            status_code=303,
+        )
+    finally:
+        client.close()
+
+    return RedirectResponse(
+        _log_redirect_url(min_gb, max_gb, result=f"Redownload: {outcome}."), status_code=303
+    )
+
+
+@router.post("/log/redownload-bulk")
+def log_redownload_bulk(
+    app_id: int = Form(...),
+    min_gb: float = Form(...),
+    max_gb: float | None = Form(None),
+    quality_profile_id: str = Form(""),
+):
+    """Same as /log/redownload, but for every file the library scan
+    currently has in this app's active size-bucket filter -- one Radarr
+    movie index built once and shared, then one action per file. A file
+    that can't be resolved (see _apply_redownload) is skipped, logged, and
+    counted, not allowed to abort the rest of the batch.
+    """
+    with session(settings.db_path) as conn:
+        app = conn.execute("SELECT * FROM apps WHERE id = ? AND kind = 'radarr'", (app_id,)).fetchone()
+    if app is None:
+        raise HTTPException(status_code=404, detail="app not found")
+
+    min_bytes = min_gb * 1024**3
+    max_bytes = max_gb * 1024**3 if max_gb is not None else None
+    targets = [
+        f
+        for f in movie_library_cache.files
+        if f["app_id"] == app_id
+        and f["size_bytes"] > min_bytes
+        and (max_bytes is None or f["size_bytes"] <= max_bytes)
+    ]
+
+    profile_id = int(quality_profile_id) if quality_profile_id else None
+    client = arr.RadarrApp(app["base_url"], app["api_key"])
+    succeeded = 0
+    skipped = 0
+    try:
+        by_path, by_title_year = client.build_movie_index()
+        for f in targets:
+            try:
+                outcome = _apply_redownload(client, app["staging_root"], f, by_path, by_title_year, profile_id)
+                logger.info("bulk redownload: %s", outcome)
+                succeeded += 1
+            except ValueError as exc:
+                logger.warning("bulk redownload skipped: %s", exc)
+                skipped += 1
+    except httpx.HTTPError:
+        logger.exception("bulk redownload failed for app %r", app_id)
+        return RedirectResponse(
+            _log_redirect_url(min_gb, max_gb, error="Could not reach Radarr -- see the server log."),
+            status_code=303,
+        )
+    finally:
+        client.close()
+
+    result = f"Redownload triggered for {succeeded} file{'s' if succeeded != 1 else ''}."
+    if skipped:
+        result += f" {skipped} skipped (needed a quality profile, or couldn't be matched) -- see the server log."
+    return RedirectResponse(_log_redirect_url(min_gb, max_gb, result=result), status_code=303)
 
 
 @router.post("/jobs/{job_id}/retry")

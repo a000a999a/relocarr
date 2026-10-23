@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -11,6 +12,21 @@ logger = logging.getLogger(__name__)
 MOVIE_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".m4v", ".wmv", ".ts", ".m2ts", ".webm"}
 
 SCAN_INTERVAL_SECONDS = 600.0
+
+_TITLE_YEAR_RE = re.compile(r"^(.*?)\s*\((\d{4})\)\s*$")
+
+
+def parse_title_year(filename: str) -> tuple[str, int] | None:
+    """Pulls "Title" and 1982 out of "Title (1982).mkv" -- Radarr's own
+    flat-layout naming convention, confirmed against the real library
+    (e.g. "Example Feature (1982).mkv"). Returns None for
+    anything that doesn't match, rather than guessing.
+    """
+    stem = Path(filename).stem
+    m = _TITLE_YEAR_RE.match(stem)
+    if not m:
+        return None
+    return m.group(1).strip(), int(m.group(2))
 
 
 def scan_movie_files(apps: list[sqlite3.Row]) -> list[dict]:
@@ -41,7 +57,15 @@ def scan_movie_files(apps: list[sqlite3.Row]) -> list[dict]:
                 size_bytes = path.stat().st_size
             except OSError:
                 continue
-            files.append({"name": path.name, "app_name": app["name"], "size_bytes": size_bytes})
+            files.append(
+                {
+                    "name": path.name,
+                    "path": str(path),
+                    "app_id": app["id"],
+                    "app_name": app["name"],
+                    "size_bytes": size_bytes,
+                }
+            )
     return files
 
 
