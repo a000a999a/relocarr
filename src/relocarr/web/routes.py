@@ -430,21 +430,74 @@ def jobs_list(request: Request):
     return templates.TemplateResponse(request, "jobs.html", {"jobs": jobs})
 
 
+SIZE_BUCKET_THRESHOLDS_GB = (2.5, 3, 4)
+
+
 @router.get("/log")
-def transfer_log(request: Request):
+def transfer_log(request: Request, min_gb: float | None = None):
     """Historical record of finished transfer attempts -- success
     (DONE), failed (NEEDS_ATTENTION), or skipped (SKIPPED) -- each with the
     timestamp it reached that state. In-flight jobs (IMPORTED through
     RECONCILED) don't appear here; see /jobs for those.
+
+    Also shows a free-space capacity projection for each configured movie
+    (Radarr) target, and a breakdown of how many transferred files fall into
+    a few size buckets -- optionally filtered down to just one via ?min_gb=.
     """
     with session(settings.db_path) as conn:
-        entries = conn.execute(
+        apps = conn.execute("SELECT * FROM apps").fetchall()
+        all_entries = conn.execute(
             """SELECT jobs.*, apps.name AS app_name FROM jobs
                JOIN apps ON apps.id = jobs.app_id
                WHERE jobs.state IN ('DONE', 'NEEDS_ATTENTION', 'SKIPPED')
                ORDER BY jobs.updated_at DESC LIMIT 500"""
         ).fetchall()
-    return templates.TemplateResponse(request, "log.html", {"entries": entries})
+
+    size_buckets = [
+        {
+            "gb": threshold,
+            "count": sum(
+                1 for e in all_entries if e["size_bytes"] and e["size_bytes"] > threshold * 1024**3
+            ),
+        }
+        for threshold in SIZE_BUCKET_THRESHOLDS_GB
+    ]
+
+    entries = all_entries
+    if min_gb is not None:
+        min_bytes = min_gb * 1024**3
+        entries = [e for e in all_entries if e["size_bytes"] and e["size_bytes"] > min_bytes]
+
+    capacity_projection = []
+    seen_target_roots: set[str] = set()
+    for app in apps:
+        target_root = app["target_root"]
+        if app["kind"] != "radarr" or not target_root or target_root in seen_target_roots:
+            continue
+        seen_target_roots.add(target_root)
+        try:
+            free = shutil.disk_usage(target_root).free
+        except OSError:
+            continue
+        capacity_projection.append(
+            {
+                "label": app["name"],
+                "free_gb": free / 1024**3,
+                "at_1gb": int(free // 1024**3),
+                "at_2gb": int(free // (2 * 1024**3)),
+            }
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "log.html",
+        {
+            "entries": entries,
+            "capacity_projection": capacity_projection,
+            "size_buckets": size_buckets,
+            "min_gb": min_gb,
+        },
+    )
 
 
 @router.post("/jobs/{job_id}/retry")

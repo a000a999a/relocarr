@@ -3,6 +3,38 @@
 {% block content %}
 <h1>Transfer Log</h1>
 
+<div class="card" style="margin-bottom: 16px; font-size: 13px;">
+  {% if capacity_projection %}
+    {% for c in capacity_projection %}
+    <p style="margin: 0 0 4px;">
+      <strong>{{ c.label }}</strong> -- {{ c.free_gb | round(1) }} GB free: room for about
+      <strong>{{ c.at_1gb }}</strong> more movies at 1 GB each, or
+      <strong>{{ c.at_2gb }}</strong> at 2 GB each.
+    </p>
+    {% endfor %}
+  {% else %}
+    <p style="margin: 0 0 4px; color: var(--text-dim);">
+      No Radarr target folder configured yet -- add one to see a capacity projection here.
+    </p>
+  {% endif %}
+
+  <p style="margin: 8px 0 0; color: var(--text-dim);">
+    Size breakdown:
+    {% for b in size_buckets %}
+      <a href="/log?min_gb={{ b.gb }}" style="color: var(--accent);{% if min_gb == b.gb %} font-weight: 700;{% endif %}">{{ b.count }} file{{ "s" if b.count != 1 else "" }} &gt; {{ b.gb }} GB</a>{% if not loop.last %} &middot; {% endif %}
+    {% endfor %}
+    {% if min_gb is not none %}
+      &middot; <a href="/log" style="color: var(--text-dim);">clear filter</a>
+    {% endif %}
+  </p>
+</div>
+
+{% if min_gb is not none %}
+<p style="font-size: 13px; color: var(--text-dim); margin-top: -8px;">
+  Showing only files larger than {{ min_gb }} GB.
+</p>
+{% endif %}
+
 {% if entries %}
 <table>
   <tr><th>Time</th><th>App</th><th>File</th><th>Status</th><th>Size</th><th>Error</th></tr>
@@ -25,6 +57,8 @@
   </tr>
   {% endfor %}
 </table>
+{% elif min_gb is not none %}
+<div class="card empty-state">No transfers larger than {{ min_gb }} GB.</div>
 {% else %}
 <div class="card empty-state">No completed transfers yet.</div>
 {% endif %}
