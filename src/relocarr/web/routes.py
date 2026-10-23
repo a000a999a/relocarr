@@ -2,6 +2,7 @@ import os
 import secrets
 import shutil
 import time
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Header, HTTPException, Request
@@ -13,6 +14,7 @@ from ..arr.payloads import parse_radarr_webhook, parse_sonarr_webhook
 from ..arr.preflight import evaluate_preflight
 from ..config import settings
 from ..db import session
+from ..library import cache as movie_library_cache
 from ..transfer.layout import compute_target_path
 from ..transfer.safety import PathSafetyError, assert_distinct_roots
 
@@ -440,33 +442,40 @@ def transfer_log(request: Request, min_gb: float | None = None):
     timestamp it reached that state. In-flight jobs (IMPORTED through
     RECONCILED) don't appear here; see /jobs for those.
 
-    Also shows a free-space capacity projection for each configured movie
-    (Radarr) target, and a breakdown of how many transferred files fall into
-    a few size buckets -- optionally filtered down to just one via ?min_gb=.
+    Also shows a free-space capacity projection, and a size breakdown of
+    the movie files actually sitting in each Radarr target folder right
+    now -- read from `library.cache`, a periodically-refreshed scan of the
+    filesystem, not from job history (which only has entries for files
+    relocarr itself moved, a small fraction of a library that likely
+    existed before relocarr did). ?min_gb= filters that file list down to
+    one size bucket.
     """
     with session(settings.db_path) as conn:
         apps = conn.execute("SELECT * FROM apps").fetchall()
-        all_entries = conn.execute(
+        entries = conn.execute(
             """SELECT jobs.*, apps.name AS app_name FROM jobs
                JOIN apps ON apps.id = jobs.app_id
                WHERE jobs.state IN ('DONE', 'NEEDS_ATTENTION', 'SKIPPED')
                ORDER BY jobs.updated_at DESC LIMIT 500"""
         ).fetchall()
 
+    movie_files = movie_library_cache.files
     size_buckets = [
         {
             "gb": threshold,
-            "count": sum(
-                1 for e in all_entries if e["size_bytes"] and e["size_bytes"] > threshold * 1024**3
-            ),
+            "count": sum(1 for f in movie_files if f["size_bytes"] > threshold * 1024**3),
         }
         for threshold in SIZE_BUCKET_THRESHOLDS_GB
     ]
 
-    entries = all_entries
+    filtered_movie_files = None
     if min_gb is not None:
         min_bytes = min_gb * 1024**3
-        entries = [e for e in all_entries if e["size_bytes"] and e["size_bytes"] > min_bytes]
+        filtered_movie_files = sorted(
+            (f for f in movie_files if f["size_bytes"] > min_bytes),
+            key=lambda f: f["size_bytes"],
+            reverse=True,
+        )
 
     capacity_projection = []
     seen_target_roots: set[str] = set()
@@ -496,6 +505,12 @@ def transfer_log(request: Request, min_gb: float | None = None):
             "capacity_projection": capacity_projection,
             "size_buckets": size_buckets,
             "min_gb": min_gb,
+            "filtered_movie_files": filtered_movie_files,
+            "library_scanned_at": (
+                datetime.fromtimestamp(movie_library_cache.scanned_at).strftime("%Y-%m-%d %H:%M:%S")
+                if movie_library_cache.scanned_at
+                else None
+            ),
         },
     )
 

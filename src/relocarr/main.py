@@ -8,6 +8,8 @@ from fastapi.staticfiles import StaticFiles
 from .config import settings
 from .db import init_db
 from .jobs.scheduler import run_forever
+from .library import cache as movie_library_cache
+from .library import run_library_scan_forever
 from .web.routes import router
 
 # Confirmed missing in production, 2026-10-22: every logger.info() call across
@@ -29,9 +31,13 @@ async def lifespan(app: FastAPI):
     init_db(settings.db_path)
     stop_event = asyncio.Event()
     scheduler_task = asyncio.create_task(run_forever(settings.db_path, stop_event))
+    library_scan_task = asyncio.create_task(
+        run_library_scan_forever(settings.db_path, movie_library_cache, stop_event)
+    )
     yield
     stop_event.set()
     await scheduler_task
+    await library_scan_task
 
 
 app = FastAPI(title="relocarr", lifespan=lifespan)
