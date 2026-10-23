@@ -41,6 +41,34 @@
 <div class="card empty-state" style="padding: 16px 0;">No paths configured yet.</div>
 {% endif %}
 
+<h1 style="font-size: 16px; margin: 24px 0 8px;">Movie Library Scan</h1>
+<table>
+  <tr>
+    <td style="color: var(--text-dim); width: 180px;">Status</td>
+    <td>
+      {% if library_scan.level == 'ok' %}
+      <span style="color: #81c995;">OK</span> -- last succeeded {{ library_scanned_at }}
+      {% elif library_scan.level == 'warning' %}
+      <span style="color: #e0a84e;">{{ library_scan.message | safe }}</span>
+      {% else %}
+      <span style="color: var(--btn-danger);">{{ library_scan.message | safe }}</span>
+      {% endif %}
+    </td>
+  </tr>
+  {% if unreachable_roots %}
+  <tr>
+    <td style="color: var(--text-dim);">Unreachable paths</td>
+    <td style="color: var(--btn-danger);">{{ unreachable_roots | join(", ") }}</td>
+  </tr>
+  {% endif %}
+</table>
+<p style="color: var(--text-dim); font-size: 12px; margin: 8px 0 0;">
+  A scan that looks stuck (not just "Shield is off" -- status above says so explicitly) can't be
+  cleared from inside the app: restart the container to drop whatever filesystem call it's stuck
+  on -- <code>docker restart relocarr</code> from the host, or <code>./install.sh</code> from the
+  project folder (also rebuilds).
+</p>
+
 <h1 style="font-size: 16px; margin: 24px 0 8px;">About</h1>
 <table>
   <tr><td style="color: var(--text-dim); width: 180px;">Version</td><td>{{ version }}</td></tr>

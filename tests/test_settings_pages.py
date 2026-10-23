@@ -1,8 +1,11 @@
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
 from relocarr.config import settings as app_settings
 from relocarr.db import init_db, session
+from relocarr.library import cache as movie_library_cache
 
 
 @pytest.fixture
@@ -124,3 +127,63 @@ def test_setup_guide_renders(client):
     assert "Sonarr" in resp.text
     assert "Transmission" in resp.text
     assert "Completed Download Handling" in resp.text
+
+
+def test_system_page_shows_scan_not_yet_run(client):
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "Movie library has not been scanned yet." in resp.text
+
+
+def test_system_page_shows_scan_ok_after_a_recent_success(client):
+    movie_library_cache.scanned_at = time.time()
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert ">OK<" in resp.text
+
+
+def test_system_page_shows_stale_scan_as_an_error_with_restart_instructions(client):
+    # Older than 3x the (10 min) scan interval -- stale enough to suggest
+    # a wedged mount, not just "hasn't had its turn yet."
+    movie_library_cache.scanned_at = time.time() - 2000
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "may be stuck on an unreachable mount" in resp.text
+    assert "docker restart relocarr" in resp.text
+
+
+def test_system_page_shows_unreachable_roots(client):
+    movie_library_cache.scanned_at = time.time()
+    movie_library_cache.unreachable_roots = ["/mnt/nvidia/movies"]
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "/mnt/nvidia/movies" in resp.text
+
+
+def test_sidebar_badge_hidden_when_nothing_wrong(client):
+    movie_library_cache.scanned_at = time.time()
+    resp = client.get("/log")
+    assert resp.status_code == 200
+    assert '<span class="nav-badge' not in resp.text  # CSS class def is always present; the badge element itself shouldn't be
+
+
+def test_sidebar_badge_shows_for_needs_attention_jobs(client, tmp_path):
+    movie_library_cache.scanned_at = time.time()
+    app_id = _insert_app(str(tmp_path))
+    with session(app_settings.db_path) as conn:
+        conn.execute(
+            """INSERT INTO jobs (app_id, download_id, media_file_id, unmonitor_id, source_path, target_path, size_bytes, state)
+               VALUES (?, NULL, 'f1', 1, '/s/a.mkv', '/t/a.mkv', 1000, 'NEEDS_ATTENTION')""",
+            (app_id,),
+        )
+
+    resp = client.get("/log")
+    assert resp.status_code == 200
+    assert 'class="nav-badge error"' in resp.text
+    assert ">1<" in resp.text
+
+
+def test_sidebar_badge_warns_before_the_first_scan(client):
+    resp = client.get("/log")
+    assert resp.status_code == 200
+    assert 'class="nav-badge warning"' in resp.text

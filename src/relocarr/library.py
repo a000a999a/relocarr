@@ -40,14 +40,17 @@ def parse_title_year(filename: str) -> tuple[str, int] | None:
     return m.group(1).strip(), int(m.group(2))
 
 
-def scan_movie_files(apps: list[sqlite3.Row]) -> list[dict]:
+def scan_movie_files(apps: list[sqlite3.Row]) -> tuple[list[dict], list[str]]:
     """Walk every configured Radarr target folder and return each movie
-    file's name, owning app, and size. A real filesystem read, not a query
-    over job history -- relocarr's job log only has entries for files it
-    personally moved, a small fraction of a library that likely existed
-    before relocarr did.
+    file's name, owning app, and size, plus any target root that wasn't
+    even reachable (e.g. the Shield powered off, or an autofs mount that
+    never triggered) -- the System page's health badge surfaces that
+    second part. A real filesystem read, not a query over job history --
+    relocarr's job log only has entries for files it personally moved, a
+    small fraction of a library that likely existed before relocarr did.
     """
     files: list[dict] = []
+    unreachable_roots: list[str] = []
     seen_roots: set[str] = set()
     for app in apps:
         if app["kind"] != "radarr":
@@ -58,6 +61,7 @@ def scan_movie_files(apps: list[sqlite3.Row]) -> list[dict]:
         seen_roots.add(target_root)
         root = Path(target_root)
         if not root.is_dir():
+            unreachable_roots.append(target_root)
             continue
         for path in root.rglob("*"):
             if path.suffix.lower() not in MOVIE_EXTENSIONS:
@@ -77,7 +81,7 @@ def scan_movie_files(apps: list[sqlite3.Row]) -> list[dict]:
                     "size_bytes": size_bytes,
                 }
             )
-    return files
+    return files, unreachable_roots
 
 
 class MovieLibraryCache:
@@ -91,6 +95,8 @@ class MovieLibraryCache:
     def __init__(self) -> None:
         self.files: list[dict] = []
         self.scanned_at: float | None = None
+        self.unreachable_roots: list[str] = []
+        self.last_timeout_at: float | None = None
 
 
 cache = MovieLibraryCache()
@@ -106,7 +112,7 @@ async def run_library_scan_forever(
             with session(db_path) as conn:
                 apps = conn.execute("SELECT * FROM apps").fetchall()
             try:
-                files = await asyncio.wait_for(
+                files, unreachable_roots = await asyncio.wait_for(
                     asyncio.to_thread(scan_movie_files, apps), timeout=SCAN_TIMEOUT_SECONDS
                 )
             except TimeoutError:
@@ -115,8 +121,10 @@ async def run_library_scan_forever(
                     "keeping the last good snapshot and retrying next cycle",
                     SCAN_TIMEOUT_SECONDS,
                 )
+                cache.last_timeout_at = time.time()
             else:
                 cache.files = files
+                cache.unreachable_roots = unreachable_roots
                 cache.scanned_at = time.time()
         except Exception:  # noqa: BLE001 -- a failed scan must not kill the loop
             logger.exception("movie library scan failed")

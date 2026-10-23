@@ -13,6 +13,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import VERSION, arr
+from .. import library
 from ..arr.payloads import parse_radarr_webhook, parse_sonarr_webhook
 from ..arr.preflight import evaluate_preflight
 from ..config import settings
@@ -30,6 +31,79 @@ templates = Jinja2Templates(directory="src/relocarr/web/templates")
 _PARSERS = {"radarr": parse_radarr_webhook, "sonarr": parse_sonarr_webhook}
 
 START_TIME = time.monotonic()
+
+# If a scan hasn't succeeded in this long, something's actually wrong --
+# a wedged mount (library.py's SCAN_TIMEOUT_SECONDS already protects a
+# single attempt from hanging forever, but the background thread it gave up
+# waiting on can still be stuck) rather than just "hasn't had its 10-minute
+# turn yet."
+STALE_SCAN_THRESHOLD_SECONDS = library.SCAN_INTERVAL_SECONDS * 3
+
+RESTART_INSTRUCTIONS = (
+    "Restart relocarr to clear it: <code>docker restart relocarr</code> from the host "
+    "(or <code>./install.sh</code> from the project folder, which also rebuilds). "
+    "Python cannot force-kill a hung filesystem call directly -- only a full "
+    "process restart reliably does."
+)
+
+
+def _library_scan_status() -> dict:
+    """Health of the background movie-library scan (library.py), for both
+    the System page and the sidebar badge. Three states: never scanned yet
+    (every scan loop takes a few seconds to start, this is expected right
+    after startup); stale (last success is old enough to suggest it is
+    stuck, not just waiting its turn); ok.
+    """
+    scanned_at = movie_library_cache.scanned_at
+    if scanned_at is None:
+        return {"level": "warning", "message": "Movie library has not been scanned yet."}
+
+    age_seconds = time.time() - scanned_at
+    if age_seconds > STALE_SCAN_THRESHOLD_SECONDS:
+        age_minutes = int(age_seconds // 60)
+        return {
+            "level": "error",
+            "message": f"Movie library scan has not succeeded in {age_minutes} min -- "
+            f"may be stuck on an unreachable mount. {RESTART_INSTRUCTIONS}",
+        }
+
+    if movie_library_cache.last_timeout_at and movie_library_cache.last_timeout_at > scanned_at:
+        return {
+            "level": "warning",
+            "message": "The last scan attempt timed out; showing an earlier successful scan. "
+            f"If this keeps happening: {RESTART_INSTRUCTIONS}",
+        }
+
+    return {"level": "ok", "message": None}
+
+
+def _sidebar_issues() -> dict:
+    """Cheap, no-live-network-call issue summary for the sidebar's System
+    badge -- evaluated on every page load (it's a Jinja global, called from
+    base.html), so deliberately limited to fast signals: one DB count plus
+    the already-scheduled library scan's own in-memory cache. Radarr/Sonarr
+    connectivity itself stays on the dedicated System page, which already
+    checks it live -- too slow to repeat on every navigation.
+    """
+    with session(settings.db_path) as conn:
+        needs_attention = conn.execute(
+            "SELECT COUNT(*) AS n FROM jobs WHERE state = 'NEEDS_ATTENTION'"
+        ).fetchone()["n"]
+
+    scan_status = _library_scan_status()
+    unreachable_count = len(movie_library_cache.unreachable_roots)
+
+    count = needs_attention + (1 if scan_status["level"] != "ok" else 0) + unreachable_count
+    if needs_attention or scan_status["level"] == "error":
+        level = "error"
+    elif count:
+        level = "warning"
+    else:
+        level = "ok"
+    return {"count": count, "level": level}
+
+
+templates.env.globals["sidebar_issues"] = _sidebar_issues
 
 
 def _check_target_folder(staging_root: str, target_root: str) -> str | None:
@@ -899,5 +973,12 @@ def system_status(request: Request):
             "uptime_seconds": uptime_seconds,
             "app_count": len(apps),
             "open_jobs": open_jobs,
+            "library_scan": _library_scan_status(),
+            "library_scanned_at": (
+                datetime.fromtimestamp(movie_library_cache.scanned_at).strftime("%Y-%m-%d %H:%M:%S")
+                if movie_library_cache.scanned_at
+                else None
+            ),
+            "unreachable_roots": movie_library_cache.unreachable_roots,
         },
     )

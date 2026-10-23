@@ -1,6 +1,10 @@
+import asyncio
+
+import pytest
+
 from relocarr.config import settings as app_settings
 from relocarr.db import init_db, session
-from relocarr.library import parse_title_year, scan_movie_files
+from relocarr.library import MovieLibraryCache, parse_title_year, run_library_scan_forever, scan_movie_files
 
 
 def _insert_app(db_path, kind: str, target_root: str, name: str | None = None):
@@ -23,13 +27,14 @@ def test_scan_movie_files_finds_video_files_in_radarr_target(tmp_path):
     (target / "poster.jpg").write_bytes(b"x" * 10)  # not a video extension -- ignored
     apps = _insert_app(db_path, "radarr", str(target))
 
-    files = scan_movie_files(apps)
+    files, unreachable = scan_movie_files(apps)
 
     names = {f["name"] for f in files}
     assert names == {"Movie One.mkv", "Movie Two.mp4"}
     sizes = {f["name"]: f["size_bytes"] for f in files}
     assert sizes["Movie One.mkv"] == 100
     assert sizes["Movie Two.mp4"] == 200
+    assert unreachable == []
 
 
 def test_scan_movie_files_ignores_sonarr_apps(tmp_path):
@@ -40,7 +45,7 @@ def test_scan_movie_files_ignores_sonarr_apps(tmp_path):
     (target / "Episode.mkv").write_bytes(b"x" * 100)
     apps = _insert_app(db_path, "sonarr", str(target))
 
-    assert scan_movie_files(apps) == []
+    assert scan_movie_files(apps) == ([], [])
 
 
 def test_scan_movie_files_recurses_into_subfolders(tmp_path):
@@ -51,16 +56,19 @@ def test_scan_movie_files_recurses_into_subfolders(tmp_path):
     (target / "Sub Folder" / "Nested.mkv").write_bytes(b"x" * 50)
     apps = _insert_app(db_path, "radarr", str(target))
 
-    files = scan_movie_files(apps)
+    files, _ = scan_movie_files(apps)
     assert [f["name"] for f in files] == ["Nested.mkv"]
 
 
-def test_scan_movie_files_missing_target_root_is_skipped_not_an_error(tmp_path):
+def test_scan_movie_files_missing_target_root_is_reported_unreachable(tmp_path):
     db_path = tmp_path / "relocarr.db"
     init_db(db_path)
-    apps = _insert_app(db_path, "radarr", str(tmp_path / "does-not-exist"))
+    missing = str(tmp_path / "does-not-exist")
+    apps = _insert_app(db_path, "radarr", missing)
 
-    assert scan_movie_files(apps) == []
+    files, unreachable = scan_movie_files(apps)
+    assert files == []
+    assert unreachable == [missing]
 
 
 def test_scan_movie_files_dedupes_apps_sharing_a_target_root(tmp_path):
@@ -82,7 +90,7 @@ def test_scan_movie_files_dedupes_apps_sharing_a_target_root(tmp_path):
         )
         apps = conn.execute("SELECT * FROM apps").fetchall()
 
-    files = scan_movie_files(apps)
+    files, _ = scan_movie_files(apps)
     assert len(files) == 1
 
 
@@ -102,13 +110,6 @@ def test_parse_title_year_returns_none_for_malformed_name():
     assert parse_title_year("1982.mkv") is None
 
 
-import asyncio
-
-import pytest
-
-from relocarr.library import MovieLibraryCache, run_library_scan_forever
-
-
 @pytest.mark.asyncio
 async def test_run_library_scan_forever_keeps_stale_snapshot_on_timeout(tmp_path, monkeypatch):
     db_path = tmp_path / "relocarr.db"
@@ -123,7 +124,7 @@ async def test_run_library_scan_forever_keeps_stale_snapshot_on_timeout(tmp_path
         import time
 
         time.sleep(2)  # far longer than the patched 0.05s timeout
-        return [{"name": "should-never-be-seen"}]
+        return [{"name": "should-never-be-seen"}], []
 
     monkeypatch.setattr("relocarr.library.scan_movie_files", _hang)
 
@@ -141,3 +142,22 @@ async def test_run_library_scan_forever_keeps_stale_snapshot_on_timeout(tmp_path
     # snapshot is still there rather than being wiped or left half-written.
     assert cache.files == [{"name": "stale-but-good"}]
     assert cache.scanned_at == 123.0
+    assert cache.last_timeout_at is not None
+
+
+@pytest.mark.asyncio
+async def test_run_library_scan_forever_records_unreachable_roots(tmp_path, monkeypatch):
+    db_path = tmp_path / "relocarr.db"
+    init_db(db_path)
+    _insert_app(db_path, "radarr", str(tmp_path / "offline-shield"))
+
+    monkeypatch.setattr("relocarr.library.SCAN_INTERVAL_SECONDS", 10.0)
+
+    cache = MovieLibraryCache()
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(run_library_scan_forever(db_path, cache, stop_event))
+    await asyncio.sleep(0.2)
+    stop_event.set()
+    await asyncio.wait_for(task, timeout=2)
+
+    assert cache.unreachable_roots == [str(tmp_path / "offline-shield")]

@@ -76,6 +76,13 @@
   button:hover { opacity: 0.9; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; background: #2e7d32; color: white; }
   .error { color: #f28b82; margin-bottom: 12px; }
+  .nav-badge {
+    display: inline-block; min-width: 18px; padding: 1px 6px; margin-left: 6px;
+    border-radius: 9px; font-size: 11px; font-weight: 700; text-align: center;
+    color: #1a1a1d;
+  }
+  .nav-badge.warning { background: #e0a84e; }
+  .nav-badge.error { background: var(--btn-danger); color: white; }
 </style>
 </head>
 <body>
@@ -91,7 +98,8 @@
     <a href="/settings/general" class="sub {% block nav_settings_general %}{% endblock %}">General</a>
     {% endif %}
     <a href="/setup-guide" class="{% block nav_setup_guide %}{% endblock %}">Setup Guide</a>
-    <a href="/system" class="{% block nav_system %}{% endblock %}">System</a>
+    {% set issues = sidebar_issues() %}
+    <a href="/system" class="{% block nav_system %}{% endblock %}">System{% if issues.count %}<span class="nav-badge {{ issues.level }}">{{ issues.count }}</span>{% endif %}</a>
   </nav>
   <main>
     {% block content %}{% endblock %}

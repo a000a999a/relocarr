@@ -10,18 +10,6 @@ from relocarr.db import init_db, session
 from relocarr.library import cache as movie_library_cache
 
 
-@pytest.fixture(autouse=True)
-def _reset_movie_library_cache():
-    # The cache is a module-level singleton shared by the real background
-    # scan loop -- reset it around every test so one test's fake library
-    # contents can't leak into another's assertions.
-    movie_library_cache.files = []
-    movie_library_cache.scanned_at = None
-    yield
-    movie_library_cache.files = []
-    movie_library_cache.scanned_at = None
-
-
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(app_settings, "config_dir", tmp_path)
