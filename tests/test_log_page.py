@@ -406,14 +406,17 @@ def test_redownload_unparseable_filename_shows_error(client, tmp_path):
 
 
 @respx.mock
-def test_redownload_bulk_mixes_actions_and_skips_what_it_cant_do(client, tmp_path):
+def test_redownload_bulk_acts_only_on_submitted_checkboxes(client, tmp_path):
+    # Simulates the Log page's "all checked by default" checkboxes: the
+    # three actionable rows get submitted (unparseable-filename rows have
+    # no checkbox at all, so they're never in `paths` to begin with --
+    # unlike an old range-based bulk action, nothing outside the explicit
+    # selection is ever touched).
     app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-j")
     movie_library_cache.files = [
         _file(app_id, "Replace.mkv", 3.5, path="/t/Replace.mkv"),
         _file(app_id, "Example Feature (1982).mkv", 3.6),
         _file(app_id, "Untracked Movie (2015).mkv", 3.7),
-        _file(app_id, "no-year-here.mkv", 3.8),
-        _file(app_id, "TooSmall.mkv", 1),
     ]
     movie_library_cache.scanned_at = time.time()
 
@@ -445,17 +448,71 @@ def test_redownload_bulk_mixes_actions_and_skips_what_it_cant_do(client, tmp_pat
     respx.put("http://radarr-j/api/v3/movie/7").mock(return_value=httpx.Response(200))
     respx.delete(url__regex=r".*/api/v3/moviefile/.*").mock(return_value=httpx.Response(200))
     respx.post("http://radarr-j/api/v3/command").mock(return_value=httpx.Response(201))
-    # No quality_profile_id is submitted below, so "Untracked Movie" (an
-    # "add" case) can't proceed -- counted as skipped, not fatal to the rest.
+    # The POST redirects back to the same filtered /log view, which
+    # re-enriches the list against Radarr -- mock that too.
     respx.get("http://radarr-j/api/v3/qualityprofile").mock(return_value=httpx.Response(200, json=[]))
 
+    # No quality_profile_id submitted, so "Untracked Movie" (an "add" case)
+    # can't proceed -- counted as skipped, not fatal to the other two.
     resp = client.post(
         "/log/redownload-bulk",
-        data={"app_id": app_id, "min_gb": "3", "max_gb": "4"},
+        data={
+            "paths": [
+                f"{app_id}|/t/Replace.mkv",
+                f"{app_id}|/t/Example Feature (1982).mkv",
+                f"{app_id}|/t/Untracked Movie (2015).mkv",
+            ],
+            "min_gb": "3",
+            "max_gb": "4",
+        },
     )
     assert resp.status_code == 200
-    # In range: Replace (replace), Example Feature (remonitor), Untracked Movie
-    # (add, but no profile given -- skipped), no-year-here (unknown -- skipped).
-    # TooSmall is outside the 3-4 GB range entirely.
     assert "Redownload triggered for 2 files" in resp.text
-    assert "2 skipped" in resp.text
+    assert "1 skipped" in resp.text
+
+
+@respx.mock
+def test_redownload_bulk_unchecking_a_box_leaves_that_file_untouched(client, tmp_path):
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-k")
+    movie_library_cache.files = [
+        _file(app_id, "Keep.mkv", 3.5, path="/t/Keep.mkv"),
+        _file(app_id, "Unchecked.mkv", 3.6, path="/t/Unchecked.mkv"),
+    ]
+    movie_library_cache.scanned_at = time.time()
+
+    respx.get("http://radarr-k/api/v3/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 1,
+                    "title": "Keep",
+                    "year": 2020,
+                    "qualityProfileId": 1,
+                    "monitored": True,
+                    "movieFile": {"id": 101, "path": "/t/Keep.mkv"},
+                },
+                {
+                    "id": 2,
+                    "title": "Unchecked",
+                    "year": 2021,
+                    "qualityProfileId": 1,
+                    "monitored": True,
+                    "movieFile": {"id": 102, "path": "/t/Unchecked.mkv"},
+                },
+            ],
+        )
+    )
+    delete_route = respx.delete(url__regex=r".*/api/v3/moviefile/.*").mock(return_value=httpx.Response(200))
+    respx.post("http://radarr-k/api/v3/command").mock(return_value=httpx.Response(201))
+
+    # Only "Keep.mkv"'s checkbox is submitted -- as if the user unchecked
+    # "Unchecked.mkv" before clicking the bulk button.
+    resp = client.post(
+        "/log/redownload-bulk",
+        data={"paths": [f"{app_id}|/t/Keep.mkv"]},
+    )
+    assert resp.status_code == 200
+    assert "Redownload triggered for 1 file" in resp.text
+    assert delete_route.call_count == 1
+    assert delete_route.calls.last.request.url.path == "/api/v3/moviefile/101"

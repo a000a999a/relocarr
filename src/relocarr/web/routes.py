@@ -721,58 +721,71 @@ def log_redownload(
 
 @router.post("/log/redownload-bulk")
 def log_redownload_bulk(
-    app_id: int = Form(...),
-    min_gb: float = Form(...),
-    max_gb: float | None = Form(None),
+    paths: list[str] = Form(...),
     quality_profile_id: str = Form(""),
+    min_gb: float | None = Form(None),
+    max_gb: float | None = Form(None),
 ):
-    """Same as /log/redownload, but for every file the library scan
-    currently has in this app's active size-bucket filter -- one Radarr
-    movie index built once and shared, then one action per file. A file
-    that can't be resolved (see _apply_redownload) is skipped, logged, and
-    counted, not allowed to abort the rest of the batch.
+    """The Log page's checkbox-driven bulk redownload. Each `paths` value
+    is "<app_id>|<path>" -- the checkbox is checked by default for every
+    row (unparseable-filename rows excluded, they have no checkbox at
+    all), so submitting with nothing unchecked means every actionable
+    file currently shown; unchecking rows selects just a few, with no
+    JavaScript needed. Grouped by app so each app's Radarr movie index is
+    only built once no matter how many of its files were selected. A file
+    that can't be resolved (see _apply_redownload) is skipped, logged,
+    and counted -- never allowed to abort the rest of the batch.
     """
-    with session(settings.db_path) as conn:
-        app = conn.execute("SELECT * FROM apps WHERE id = ? AND kind = 'radarr'", (app_id,)).fetchone()
-    if app is None:
-        raise HTTPException(status_code=404, detail="app not found")
+    files_by_path = {(f["app_id"], f["path"]): f for f in movie_library_cache.files}
+    targets_by_app: dict[int, list[dict]] = {}
+    for raw in paths:
+        app_id_str, _, path = raw.partition("|")
+        try:
+            app_id = int(app_id_str)
+        except ValueError:
+            continue
+        f = files_by_path.get((app_id, path))
+        if f is not None:
+            targets_by_app.setdefault(app_id, []).append(f)
 
-    min_bytes = min_gb * 1024**3
-    max_bytes = max_gb * 1024**3 if max_gb is not None else None
-    targets = [
-        f
-        for f in movie_library_cache.files
-        if f["app_id"] == app_id
-        and f["size_bytes"] > min_bytes
-        and (max_bytes is None or f["size_bytes"] <= max_bytes)
-    ]
+    with session(settings.db_path) as conn:
+        apps_by_id = {
+            a["id"]: a for a in conn.execute("SELECT * FROM apps WHERE kind = 'radarr'").fetchall()
+        }
 
     profile_id = int(quality_profile_id) if quality_profile_id else None
-    client = arr.RadarrApp(app["base_url"], app["api_key"])
     succeeded = 0
     skipped = 0
-    try:
-        by_path, by_title_year = client.build_movie_index()
-        for f in targets:
-            try:
-                outcome = _apply_redownload(client, app["staging_root"], f, by_path, by_title_year, profile_id)
-                logger.info("bulk redownload: %s", outcome)
-                succeeded += 1
-            except ValueError as exc:
-                logger.warning("bulk redownload skipped: %s", exc)
-                skipped += 1
-    except httpx.HTTPError:
-        logger.exception("bulk redownload failed for app %r", app_id)
-        return RedirectResponse(
-            _log_redirect_url(min_gb, max_gb, error="Could not reach Radarr -- see the server log."),
-            status_code=303,
-        )
-    finally:
-        client.close()
+    had_connection_error = False
+    for app_id, files in targets_by_app.items():
+        app = apps_by_id.get(app_id)
+        if app is None:
+            skipped += len(files)
+            continue
+        client = arr.RadarrApp(app["base_url"], app["api_key"])
+        try:
+            by_path, by_title_year = client.build_movie_index()
+            for f in files:
+                try:
+                    outcome = _apply_redownload(
+                        client, app["staging_root"], f, by_path, by_title_year, profile_id
+                    )
+                    logger.info("bulk redownload: %s", outcome)
+                    succeeded += 1
+                except ValueError as exc:
+                    logger.warning("bulk redownload skipped: %s", exc)
+                    skipped += 1
+        except httpx.HTTPError:
+            logger.exception("bulk redownload failed for app %r", app_id)
+            had_connection_error = True
+            skipped += len(files)
+        finally:
+            client.close()
 
     result = f"Redownload triggered for {succeeded} file{'s' if succeeded != 1 else ''}."
     if skipped:
-        result += f" {skipped} skipped (needed a quality profile, or couldn't be matched) -- see the server log."
+        result += f" {skipped} skipped"
+        result += " (Radarr unreachable for some) -- see the server log." if had_connection_error else "."
     return RedirectResponse(_log_redirect_url(min_gb, max_gb, result=result), status_code=303)
 
 
