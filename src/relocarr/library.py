@@ -13,6 +13,17 @@ MOVIE_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".m4v", ".wmv", ".ts", ".m2t
 
 SCAN_INTERVAL_SECONDS = 600.0
 
+# A real scan takes ~20s even over a slow network mount (measured). 60s gives
+# generous headroom for "just slow" without leaving a wedged mount (ping
+# works, I/O hangs in uninterruptible D-state -- a real, documented failure
+# mode for this project's NAS) able to freeze the cache forever. Note this
+# can't actually kill the underlying blocked thread -- Python can't cancel a
+# blocked syscall -- it just stops *waiting* on it, so the loop keeps retrying
+# on schedule instead of getting stuck. A wedge still leaks one stuck thread
+# per retry until the mount recovers; this bounds the damage, it doesn't
+# eliminate the underlying OS-level issue.
+SCAN_TIMEOUT_SECONDS = 60.0
+
 _TITLE_YEAR_RE = re.compile(r"^(.*?)\s*\((\d{4})\)\s*$")
 
 
@@ -94,9 +105,19 @@ async def run_library_scan_forever(
         try:
             with session(db_path) as conn:
                 apps = conn.execute("SELECT * FROM apps").fetchall()
-            files = await asyncio.to_thread(scan_movie_files, apps)
-            cache.files = files
-            cache.scanned_at = time.time()
+            try:
+                files = await asyncio.wait_for(
+                    asyncio.to_thread(scan_movie_files, apps), timeout=SCAN_TIMEOUT_SECONDS
+                )
+            except TimeoutError:
+                logger.warning(
+                    "movie library scan timed out after %ss -- possible wedged mount; "
+                    "keeping the last good snapshot and retrying next cycle",
+                    SCAN_TIMEOUT_SECONDS,
+                )
+            else:
+                cache.files = files
+                cache.scanned_at = time.time()
         except Exception:  # noqa: BLE001 -- a failed scan must not kill the loop
             logger.exception("movie library scan failed")
         try:
