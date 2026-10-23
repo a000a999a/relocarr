@@ -81,12 +81,42 @@ def test_log_size_breakdown_counts_come_from_the_scanned_library_not_job_history
 
     resp = client.get("/log")
     assert resp.status_code == 200
-    assert "3 files &gt; 2.5 GB" in resp.text
-    assert "2 files &gt; 3 GB" in resp.text
+    # Non-overlapping bands now -- each file counts in exactly one bucket,
+    # not every bucket its size clears.
+    assert "1 file 2.5-3 GB" in resp.text
+    assert "1 file 3-4 GB" in resp.text
     assert "1 file &gt; 4 GB" in resp.text
 
 
-def test_log_min_gb_lists_matching_library_files(client):
+def test_log_bucket_link_includes_max_gb_for_bounded_bands(client):
+    movie_library_cache.files = []
+    movie_library_cache.scanned_at = time.time()
+
+    resp = client.get("/log")
+    assert resp.status_code == 200
+    assert 'href="/log?min_gb=2.5&max_gb=3"' in resp.text
+    assert 'href="/log?min_gb=3&max_gb=4"' in resp.text
+    # The last (unbounded) bucket has no upper edge -- no &max_gb on its link.
+    assert 'href="/log?min_gb=4"' in resp.text
+
+
+def test_log_min_max_gb_lists_only_files_within_that_band(client):
+    movie_library_cache.files = [
+        {"name": "below.mkv", "app_name": "Radarr", "size_bytes": int(2 * 1024**3)},
+        {"name": "in-band.mkv", "app_name": "Radarr", "size_bytes": int(3.5 * 1024**3)},
+        {"name": "above.mkv", "app_name": "Radarr", "size_bytes": int(5 * 1024**3)},
+    ]
+    movie_library_cache.scanned_at = time.time()
+
+    resp = client.get("/log?min_gb=3&max_gb=4")
+    assert resp.status_code == 200
+    assert "Movie files 3.0-4.0 GB" in resp.text
+    assert "in-band.mkv" in resp.text
+    assert "below.mkv" not in resp.text
+    assert "above.mkv" not in resp.text  # must NOT leak into a lower band's filter
+
+
+def test_log_min_gb_alone_is_still_unbounded_above(client):
     movie_library_cache.files = [
         {"name": "small.mkv", "app_name": "Radarr", "size_bytes": int(1 * 1024**3)},
         {"name": "big.mkv", "app_name": "Radarr", "size_bytes": int(5 * 1024**3)},
@@ -108,7 +138,7 @@ def test_log_min_gb_with_no_matches_shows_empty_state(client):
 
     resp = client.get("/log?min_gb=3")
     assert resp.status_code == 200
-    assert "No movie files larger than 3.0 GB." in resp.text
+    assert "No movie files in that size range." in resp.text
 
 
 def test_log_capacity_projection_shown_for_radarr_target(client, tmp_path):

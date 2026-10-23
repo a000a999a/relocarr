@@ -435,8 +435,20 @@ def jobs_list(request: Request):
 SIZE_BUCKET_THRESHOLDS_GB = (2.5, 3, 4)
 
 
+def _size_bucket_bounds() -> list[tuple[float, float | None]]:
+    """Non-overlapping (lower, upper] bands between consecutive thresholds,
+    e.g. (2.5, 3), (3, 4), (4, None) -- so each file falls into exactly one
+    bucket instead of every bucket above it also counting it.
+    """
+    bounds = []
+    for i, lower in enumerate(SIZE_BUCKET_THRESHOLDS_GB):
+        upper = SIZE_BUCKET_THRESHOLDS_GB[i + 1] if i + 1 < len(SIZE_BUCKET_THRESHOLDS_GB) else None
+        bounds.append((lower, upper))
+    return bounds
+
+
 @router.get("/log")
-def transfer_log(request: Request, min_gb: float | None = None):
+def transfer_log(request: Request, min_gb: float | None = None, max_gb: float | None = None):
     """Historical record of finished transfer attempts -- success
     (DONE), failed (NEEDS_ATTENTION), or skipped (SKIPPED) -- each with the
     timestamp it reached that state. In-flight jobs (IMPORTED through
@@ -447,8 +459,8 @@ def transfer_log(request: Request, min_gb: float | None = None):
     now -- read from `library.cache`, a periodically-refreshed scan of the
     filesystem, not from job history (which only has entries for files
     relocarr itself moved, a small fraction of a library that likely
-    existed before relocarr did). ?min_gb= filters that file list down to
-    one size bucket.
+    existed before relocarr did). Each bucket is a non-overlapping
+    (min_gb, max_gb] band; ?min_gb=&max_gb= filters the file list to one.
     """
     with session(settings.db_path) as conn:
         apps = conn.execute("SELECT * FROM apps").fetchall()
@@ -462,17 +474,28 @@ def transfer_log(request: Request, min_gb: float | None = None):
     movie_files = movie_library_cache.files
     size_buckets = [
         {
-            "gb": threshold,
-            "count": sum(1 for f in movie_files if f["size_bytes"] > threshold * 1024**3),
+            "gb": lower,
+            "upper_gb": upper,
+            "count": sum(
+                1
+                for f in movie_files
+                if f["size_bytes"] > lower * 1024**3
+                and (upper is None or f["size_bytes"] <= upper * 1024**3)
+            ),
         }
-        for threshold in SIZE_BUCKET_THRESHOLDS_GB
+        for lower, upper in _size_bucket_bounds()
     ]
 
     filtered_movie_files = None
     if min_gb is not None:
         min_bytes = min_gb * 1024**3
+        max_bytes = max_gb * 1024**3 if max_gb is not None else None
         filtered_movie_files = sorted(
-            (f for f in movie_files if f["size_bytes"] > min_bytes),
+            (
+                f
+                for f in movie_files
+                if f["size_bytes"] > min_bytes and (max_bytes is None or f["size_bytes"] <= max_bytes)
+            ),
             key=lambda f: f["size_bytes"],
             reverse=True,
         )
@@ -505,6 +528,7 @@ def transfer_log(request: Request, min_gb: float | None = None):
             "capacity_projection": capacity_projection,
             "size_buckets": size_buckets,
             "min_gb": min_gb,
+            "max_gb": max_gb,
             "filtered_movie_files": filtered_movie_files,
             "library_scanned_at": (
                 datetime.fromtimestamp(movie_library_cache.scanned_at).strftime("%Y-%m-%d %H:%M:%S")

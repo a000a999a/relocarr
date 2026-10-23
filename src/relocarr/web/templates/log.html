@@ -22,7 +22,7 @@
     {% if library_scanned_at %}
       Size breakdown (movie folder, scanned {{ library_scanned_at }}):
       {% for b in size_buckets %}
-        <a href="/log?min_gb={{ b.gb }}" style="color: var(--accent);{% if min_gb == b.gb %} font-weight: 700;{% endif %}">{{ b.count }} file{{ "s" if b.count != 1 else "" }} &gt; {{ b.gb }} GB</a>{% if not loop.last %} &middot; {% endif %}
+        <a href="/log?min_gb={{ b.gb }}{% if b.upper_gb %}&max_gb={{ b.upper_gb }}{% endif %}" style="color: var(--accent);{% if min_gb == b.gb and max_gb == b.upper_gb %} font-weight: 700;{% endif %}">{{ b.count }} file{{ "s" if b.count != 1 else "" }} {% if b.upper_gb %}{{ b.gb }}-{{ b.upper_gb }} GB{% else %}&gt; {{ b.gb }} GB{% endif %}</a>{% if not loop.last %} &middot; {% endif %}
       {% endfor %}
       {% if min_gb is not none %}
         &middot; <a href="/log" style="color: var(--text-dim);">clear filter</a>
@@ -34,7 +34,7 @@
 </div>
 
 {% if filtered_movie_files is not none %}
-<h1 style="font-size: 16px; margin-bottom: 12px;">Movie files &gt; {{ min_gb }} GB</h1>
+<h1 style="font-size: 16px; margin-bottom: 12px;">Movie files {% if max_gb %}{{ min_gb }}-{{ max_gb }} GB{% else %}&gt; {{ min_gb }} GB{% endif %}</h1>
 {% if filtered_movie_files %}
 <table style="margin-bottom: 24px;">
   <tr><th>App</th><th>File</th><th>Size</th></tr>
@@ -47,7 +47,7 @@
   {% endfor %}
 </table>
 {% else %}
-<div class="card empty-state" style="margin-bottom: 24px;">No movie files larger than {{ min_gb }} GB.</div>
+<div class="card empty-state" style="margin-bottom: 24px;">No movie files in that size range.</div>
 {% endif %}
 {% endif %}
 
