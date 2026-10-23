@@ -45,6 +45,20 @@ CREATE TABLE IF NOT EXISTS downloads (
     UNIQUE (app_id, download_id COLLATE NOCASE)
 );
 
+-- Every downloadId ever seen in an app's *arr queue, recorded on every poll
+-- -- not just a snapshot of what's there right now. Observed race (2026-10-23):
+-- Radarr can drop a torrent from its queue the moment it hits 100%, sometimes
+-- faster than the next poll, so "currently in the queue" alone misses it and
+-- it never gets sealed/stopped -- it just keeps seeding. Checking against
+-- this accumulated set instead means a torrent, once seen even briefly,
+-- stays recognized as "ours to manage" after it drops out of the live queue.
+CREATE TABLE IF NOT EXISTS seen_downloads (
+    app_id        INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+    download_id   TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (app_id, download_id COLLATE NOCASE)
+);
+
 -- One row per imported media file. download_id is nullable: manual imports
 -- and anything not driven by the tracked download queue have none (spike 2)
 -- and skip the removal gate entirely.

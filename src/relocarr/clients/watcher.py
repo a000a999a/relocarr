@@ -23,24 +23,39 @@ def seal_completed_downloads(
     before any job exists, and only once the stop is confirmed (Section 5:
     "Stop torrent; re-read and confirm it is stopped").
 
-    Only acts on torrents whose hash appears in the *arr's current queue
-    (Section 4 point 6) -- never touches a torrent this app isn't tracking,
-    e.g. someone else's download on a shared Transmission instance.
-
-    Known race, not fully solved for v0.1: spike 5 (2026-10-21) found the
-    *arr can import a completed torrent fast enough that its queue entry is
-    already gone by the next poll. If that happens before this runs, the
-    torrent never gets explicitly sealed here -- it usually still imports
-    fine regardless (spike 1: a stopped-or-not torrent imports the same
-    way), this just means relocarr didn't get to stop it first.
+    Only acts on torrents whose hash has ever appeared in this app's *arr
+    queue (Section 4 point 6) -- never touches a torrent this app isn't
+    tracking, e.g. someone else's download on a shared Transmission
+    instance. "Ever appeared" rather than "appears right now" is
+    deliberate: fixed 2026-10-23, confirmed live (3 real completed
+    downloads kept seeding indefinitely) -- Radarr can drop a torrent from
+    its queue the moment it hits 100%, sometimes faster than the next poll,
+    so checking only the current queue snapshot missed it permanently (it
+    never got another chance to be sealed). Every hash seen in the queue is
+    now recorded in `seen_downloads` on every poll, and sealing checks
+    against that accumulated set instead of the live snapshot alone.
     """
     queue_hashes = {entry.download_id.lower() for entry in arr_client.get_queue()}
+    for queue_hash in queue_hashes:
+        conn.execute(
+            "INSERT OR IGNORE INTO seen_downloads (app_id, download_id) VALUES (?, ?)",
+            (app_id, queue_hash),
+        )
+    conn.commit()
+
+    tracked_hashes = queue_hashes | {
+        row["download_id"].lower()
+        for row in conn.execute(
+            "SELECT download_id FROM seen_downloads WHERE app_id = ?", (app_id,)
+        ).fetchall()
+    }
+
     sealed: list[str] = []
 
     for torrent in download_client.list_torrents():
         if not torrent.is_complete:
             continue
-        if torrent.hash.lower() not in queue_hashes:
+        if torrent.hash.lower() not in tracked_hashes:
             continue
 
         already_sealed = conn.execute(

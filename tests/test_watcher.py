@@ -124,3 +124,46 @@ def test_hash_matching_is_case_insensitive(db_path):
         sealed = seal_completed_downloads(conn, app_id=app_id, arr_client=arr, download_client=dc)
 
     assert sealed == ["hash1"]
+
+
+def test_seals_a_torrent_whose_queue_entry_vanished_before_it_finished(db_path):
+    # The actual race this fixes (confirmed live, 2026-10-23): a torrent
+    # finishes and drops out of the *arr's queue before the poll that
+    # would have caught it both complete AND still queued.
+    app_id = _insert_app(db_path)
+    dc = FakeDownloadClient(
+        torrents=[Torrent(id=9, name="Movie", hash="HASH1", percent_done=0.9, status=4, download_dir="/d")]
+    )
+
+    # Tick 1: still downloading -- its hash gets recorded as seen.
+    arr_during = FakeArrApp(queue=[QueueEntry("hash1", "downloading", "ok")])
+    with session(db_path) as conn:
+        seal_completed_downloads(conn, app_id=app_id, arr_client=arr_during, download_client=dc)
+
+    # Tick 2: now complete, but Radarr has already dropped it from the queue.
+    dc.torrents = [Torrent(id=9, name="Movie", hash="HASH1", percent_done=1.0, status=6, download_dir="/d")]
+    arr_after = FakeArrApp(queue=[])  # gone from the queue already
+    with session(db_path) as conn:
+        sealed = seal_completed_downloads(conn, app_id=app_id, arr_client=arr_after, download_client=dc)
+
+    assert sealed == ["HASH1"]
+    assert dc.stopped == [9]
+
+
+def test_still_does_not_touch_a_torrent_never_seen_in_this_apps_queue(db_path):
+    # The accumulated "ever seen" set must not weaken the original safety
+    # guarantee: a torrent this app's queue has NEVER listed, at any poll,
+    # still must never be touched (e.g. someone else's download on a
+    # shared Transmission instance).
+    app_id = _insert_app(db_path)
+    arr = FakeArrApp(queue=[])
+    dc = FakeDownloadClient(
+        torrents=[Torrent(id=9, name="Unrelated", hash="HASH1", percent_done=1.0, status=6, download_dir="/d")]
+    )
+
+    with session(db_path) as conn:
+        seal_completed_downloads(conn, app_id=app_id, arr_client=arr, download_client=dc)  # tick 1
+        sealed = seal_completed_downloads(conn, app_id=app_id, arr_client=arr, download_client=dc)  # tick 2
+
+    assert sealed == []
+    assert dc.stopped == []
