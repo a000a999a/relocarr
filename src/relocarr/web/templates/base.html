@@ -28,7 +28,7 @@
     min-height: 100vh;
   }
   nav.sidebar {
-    width: 220px;
+    width: 280px;
     background: var(--bg-sidebar);
     flex-shrink: 0;
     padding: 16px 0;
@@ -36,14 +36,14 @@
   nav.sidebar .logo {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 0 20px 20px;
-    font-size: 20px;
+    gap: 16px;
+    padding: 0 20px 28px;
+    font-size: 40px;
     font-weight: 700;
     color: var(--accent);
     letter-spacing: 0.5px;
   }
-  nav.sidebar .logo img { border-radius: 4px; flex-shrink: 0; }
+  nav.sidebar .logo img { border-radius: 8px; flex-shrink: 0; }
   nav.sidebar a {
     display: block;
     padding: 10px 20px;
@@ -87,7 +87,7 @@
 </head>
 <body>
   <nav class="sidebar">
-    <div class="logo"><img src="/static/favicon.svg" width="24" height="24" alt=""> RELOCARR</div>
+    <div class="logo"><img src="/static/favicon.svg" width="48" height="48" alt=""> RELOCARR</div>
     <a href="/log" class="{% block nav_log %}{% endblock %}">Log</a>
     <a href="/jobs" class="{% block nav_jobs %}{% endblock %}">Jobs</a>
     <a href="/settings/apps" class="{% block nav_settings %}{% endblock %}">Settings</a>
