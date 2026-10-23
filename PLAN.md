@@ -374,7 +374,7 @@ relocarr/
 | **v0.2** | Preflight check for Sonarr series/season folder collisions against the destination, Plex library scan, conflict/replace handling, *On Rename* handling, `adopt` command to flatten/import existing per-movie folders on the destination, path mapping, checksum verification, notifications (webhook/ntfy). |
 | **v0.3** | qBittorrent (and Deluge) adapter, seeding policy (seed to ratio/time before removal), Jellyfin/Emby notifications, usenet clients. |
 | **Later** | Lidarr/Readarr, multiple destinations, optional shadow-library mode. |
-| **Distribution (post-MVP, not before)** | AUR package (added to roadmap 2026-10-21) — once v0.1 has an actual tagged release to package. Precedent: Radarr/Sonarr themselves have native AUR packages as an alternative to their Docker images, running as a systemd service rather than wrapping the container. GitHub release + the planned Docker image (§17) remain the primary distribution path; AUR is an additional one for Arch users, not a replacement. |
+| **Distribution (post-MVP, not before)** | AUR package (added to roadmap 2026-10-21) — once v0.1 has an actual tagged release to package. Precedent: Radarr/Sonarr themselves have native AUR packages as an alternative to their Docker images, running as a systemd service rather than wrapping the container. GitHub release + the `docker-compose.yml`/`install.sh` build-from-source flow (§17) remain the primary distribution path; AUR is an additional one for Arch users, not a replacement. |
 
 ### v0.1 implementation status (2026-10-21/22)
 
@@ -639,20 +639,25 @@ Movie B)
   manually outside the tracked mechanism** — it breaks the "one copy at a time per destination"
   invariant from this section without any visibility that it happened.
 
-## 17. Reference deployment (generic)
+## 17. Reference deployment (shipped, 2026-10-23)
 
-```yaml
-services:
-  relocarr:
-    image: ghcr.io/<owner>/relocarr:latest
-    environment: [PUID=1000, PGID=1000, TZ=UTC]
-    volumes:
-      - ./config:/config
-      - /downloads:/downloads         # same path as the *arr + client containers
-      - /mnt/media:/mnt/media         # destination, same path as inside the *arr containers
-    ports: ["8686:8686"]
-    networks: [lan-net]               # same network as radarr/sonarr/transmission
-```
+No prebuilt image is published (no `ghcr.io`/Docker Hub tag) — every user builds locally from
+source, via `docker-compose.yml` (builds the image with `build: .`) and `./install.sh`, both in
+the repo root. `install.sh` is interactive: it prompts for the staging/target roots, optionally
+an existing Docker network to join by name (so relocarr can reach Radarr/Sonarr/Transmission by
+container hostname — left blank, it falls back to the default bridge network and the *arr apps
+are reached by host IP instead), PUID/PGID, and the port, then writes `.env` and runs
+`docker compose up -d --build`. The two root paths are bind-mounted source==target
+(`${DOWNLOADS_PATH}:${DOWNLOADS_PATH}`, `${MEDIA_PATH}:${MEDIA_PATH}`) since relocarr has to see
+each file at the exact path the *arr reports it at in the webhook payload — see `.env.example`.
+
+Re-running `install.sh` with no flags reuses the existing `.env`, rebuilds, and restarts without
+touching configured apps/jobs (the SQLite DB lives in the bind-mounted `./config`, untouched by
+a container recreate). `--reconfigure` re-asks every question (backs up the old `.env` first);
+`--reset-db` wipes just the database for a true from-scratch reconfigure (backs it up first too).
+Verified against the real production deployment: stopped the old hand-run `docker run`
+container, ran `install.sh --reconfigure` with the real values, confirmed both configured apps
+and all job history survived untouched, container healthy, scheduler polling normally.
 
 Suggested layout on disk: downloads in `/downloads/<client>/<category>`, staging in
 `/downloads/<client>/staging/movies` and `/downloads/<client>/staging/tv` (same mount as the
@@ -660,7 +665,10 @@ downloads so hardlinks work), destination on the network share.
 
 ## 18. Open questions
 
-* Ship a `docker-compose` "full demo" (Radarr + Sonarr + Transmission + relocarr) for
-  contributors?
+* Ship a `docker-compose` "full demo" stack (Radarr + Sonarr + Transmission + relocarr, all
+  preconfigured) for contributors, on top of the basic single-service compose file that now
+  ships in §17?
 * Should the UI be able to create the *arr Webhook connection automatically, or only verify it?
   (Leaning: automatic, with a confirmation.)
+* Publish a prebuilt image (GHCR) once v0.1 has settled, so `install.sh` doesn't need to build
+  from source on every machine?
