@@ -516,3 +516,11 @@ def test_redownload_bulk_unchecking_a_box_leaves_that_file_untouched(client, tmp
     assert "Redownload triggered for 1 file" in resp.text
     assert delete_route.call_count == 1
     assert delete_route.calls.last.request.url.path == "/api/v3/moviefile/101"
+
+
+def test_redownload_bulk_with_nothing_checked_does_nothing(client):
+    # No "paths" form field at all -- exactly what a browser sends when
+    # every checkbox is left unchecked (the default now).
+    resp = client.post("/log/redownload-bulk", data={})
+    assert resp.status_code == 200
+    assert "No files were checked" in resp.text

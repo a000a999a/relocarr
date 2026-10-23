@@ -721,21 +721,27 @@ def log_redownload(
 
 @router.post("/log/redownload-bulk")
 def log_redownload_bulk(
-    paths: list[str] = Form(...),
+    paths: list[str] = Form(default=[]),
     quality_profile_id: str = Form(""),
     min_gb: float | None = Form(None),
     max_gb: float | None = Form(None),
 ):
     """The Log page's checkbox-driven bulk redownload. Each `paths` value
-    is "<app_id>|<path>" -- the checkbox is checked by default for every
-    row (unparseable-filename rows excluded, they have no checkbox at
-    all), so submitting with nothing unchecked means every actionable
-    file currently shown; unchecking rows selects just a few, with no
-    JavaScript needed. Grouped by app so each app's Radarr movie index is
-    only built once no matter how many of its files were selected. A file
-    that can't be resolved (see _apply_redownload) is skipped, logged,
-    and counted -- never allowed to abort the rest of the batch.
+    is "<app_id>|<path>" -- every row's checkbox is unchecked by default
+    (unparseable-filename rows have no checkbox at all), so this only ever
+    acts on files deliberately checked; a submit with nothing checked (an
+    unchecked form posts no value for that field at all) does nothing, not
+    "redownload everything." Grouped by app so each app's Radarr movie
+    index is only built once no matter how many of its files were
+    selected. A file that can't be resolved (see _apply_redownload) is
+    skipped, logged, and counted -- never allowed to abort the rest of
+    the batch.
     """
+    if not paths:
+        return RedirectResponse(
+            _log_redirect_url(min_gb, max_gb, error="No files were checked -- nothing to redownload."),
+            status_code=303,
+        )
     files_by_path = {(f["app_id"], f["path"]): f for f in movie_library_cache.files}
     targets_by_app: dict[int, list[dict]] = {}
     for raw in paths:

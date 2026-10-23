@@ -57,7 +57,7 @@
     {% endfor %}
   </select>
   <button type="submit" style="font-size: 12px;">Redownload checked files below</button>
-  <span style="color: var(--text-dim); font-size: 11px;">all checked by default -- uncheck what you don't want</span>
+  <span style="color: var(--text-dim); font-size: 11px;">check the files below you want, then submit -- nothing is redownloaded if nothing's checked</span>
 </form>
 <p style="margin: 0 0 12px; color: var(--text-dim); font-size: 12px;">
   "Redownload" deletes a file Radarr still tracks and searches again. "Re-monitor &amp; search" is for a movie
@@ -74,7 +74,7 @@
   <tr>
     <td>
       {% if f.redownload_action != 'unknown' %}
-      <input type="checkbox" name="paths" value="{{ f.app_id }}|{{ f.path }}" form="bulk-redownload-form" checked>
+      <input type="checkbox" name="paths" value="{{ f.app_id }}|{{ f.path }}" form="bulk-redownload-form">
       {% endif %}
     </td>
     <td>{{ f.app_name }}</td>
