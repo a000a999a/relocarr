@@ -56,6 +56,21 @@ for the full list of settings.
 
 See the in-app **Setup Guide** page for the full Radarr/Sonarr/Transmission checklist.
 
+## Security
+
+**The web UI has no login yet** (planned — see PLAN.md's Settings section). Anyone who can reach
+port 8686 can see your Radarr/Sonarr API keys and Transmission credentials, change where files
+are moved, and trigger Redownloads. So:
+
+- Keep it on your LAN only. **Never forward port 8686 on your router** or expose it to the
+  internet. If you need remote access, put it behind a VPN or a reverse proxy that adds its own
+  authentication.
+
+Forms in the UI are protected against cross-site request forgery: a state-changing request
+whose `Origin`/`Referer` is another site is rejected, so a random web page you open can't
+silently change relocarr's settings through your browser. The webhook endpoint is separately
+authenticated by its per-app `X-Relocarr-Token` header.
+
 ## Development
 
 ```bash

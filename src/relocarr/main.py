@@ -12,6 +12,7 @@ from .disk_health import run_disk_space_check_forever
 from .jobs.scheduler import run_forever
 from .library import cache as movie_library_cache
 from .library import run_library_scan_forever
+from .web.csrf import csrf_guard
 from .web.routes import router
 
 # Confirmed missing in production, 2026-10-22: every logger.info() call across
@@ -47,5 +48,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="relocarr", lifespan=lifespan)
+app.middleware("http")(csrf_guard)
 app.mount("/static", StaticFiles(directory="src/relocarr/web/static"), name="static")
 app.include_router(router)
