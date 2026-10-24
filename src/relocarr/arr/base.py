@@ -59,6 +59,20 @@ class MovieMatch:
 
 
 @dataclass
+class Release:
+    """One candidate release from Radarr's interactive search
+    (GET /api/v3/release) -- the same list the Radarr UI's manual search
+    screen shows, before anything is grabbed. See
+    RadarrApp.find_smaller_release.
+    """
+
+    guid: str
+    indexer_id: int
+    size_bytes: int
+    title: str
+
+
+@dataclass
 class PreflightData:
     """Raw settings the Section 10 preflight checklist is evaluated
     against. One real API call per field, all confirmed live against

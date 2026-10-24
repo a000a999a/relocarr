@@ -4,7 +4,13 @@ import pytest
 
 from relocarr.config import settings as app_settings
 from relocarr.db import init_db, session
-from relocarr.library import MovieLibraryCache, parse_title_year, run_library_scan_forever, scan_movie_files
+from relocarr.library import (
+    MovieLibraryCache,
+    parse_title_year,
+    remove_larger_duplicates,
+    run_library_scan_forever,
+    scan_movie_files,
+)
 
 
 def _insert_app(db_path, kind: str, target_root: str, name: str | None = None):
@@ -161,3 +167,61 @@ async def test_run_library_scan_forever_records_unreachable_roots(tmp_path, monk
     await asyncio.wait_for(task, timeout=2)
 
     assert cache.unreachable_roots == [str(tmp_path / "offline-shield")]
+
+
+def test_remove_larger_duplicates_removes_an_older_oversized_sibling(tmp_path):
+    kept = tmp_path / "Example Feature.1982.mp4"
+    kept.write_bytes(b"x" * 100)
+    old = tmp_path / "Example Feature (1982).mkv"
+    old.write_bytes(b"x" * 400)
+
+    removed = remove_larger_duplicates(kept, keep_size_bytes=100)
+
+    assert removed == ["Example Feature (1982).mkv"]
+    assert not old.exists()
+    assert kept.exists()
+
+
+def test_remove_larger_duplicates_never_removes_something_smaller_or_equal(tmp_path):
+    kept = tmp_path / "Example Feature.1982.mp4"
+    kept.write_bytes(b"x" * 400)
+    smaller = tmp_path / "Example Feature (1982).mkv"
+    smaller.write_bytes(b"x" * 100)
+    same_size = tmp_path / "Example Feature (1982).avi"
+    same_size.write_bytes(b"x" * 400)
+
+    removed = remove_larger_duplicates(kept, keep_size_bytes=400)
+
+    assert removed == []
+    assert smaller.exists()
+    assert same_size.exists()
+
+
+def test_remove_larger_duplicates_ignores_a_different_title_or_year(tmp_path):
+    kept = tmp_path / "Example Feature.1982.mp4"
+    kept.write_bytes(b"x" * 100)
+    (tmp_path / "A Different Film (1982).mkv").write_bytes(b"x" * 999)
+    (tmp_path / "Example Feature (1999).mkv").write_bytes(b"x" * 999)
+
+    removed = remove_larger_duplicates(kept, keep_size_bytes=100)
+
+    assert removed == []
+
+
+def test_remove_larger_duplicates_does_nothing_for_an_unparseable_filename(tmp_path):
+    kept = tmp_path / "no-year-here.mp4"
+    kept.write_bytes(b"x" * 100)
+    (tmp_path / "also-no-year.mkv").write_bytes(b"x" * 999)
+
+    assert remove_larger_duplicates(kept, keep_size_bytes=100) == []
+
+
+def test_parse_title_year_handles_the_dot_format_radarr_itself_uses():
+    # Confirmed live, 2026-10-24: Radarr renames a freshly grabbed file to
+    # "Title.Year.ext", not "Title (Year).ext" -- both formats coexist in
+    # a real library (the old files use parens, new ones use dots).
+    assert parse_title_year("Example Feature.1982.mp4") == ("Example Feature", 1982)
+
+
+def test_parse_title_year_dot_format_handles_a_multi_word_title():
+    assert parse_title_year("A Film With Several Words.2016.mkv") == ("A Film With Several Words", 2016)

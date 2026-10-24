@@ -10,8 +10,15 @@ from .base import (
     PreflightData,
     QualityProfile,
     QueueEntry,
+    Release,
     RootFolder,
 )
+
+# A candidate release must come in at or under this fraction of the current
+# file's size to count as "worth redownloading" -- a release that's 99% of
+# the current size wastes bandwidth and a download slot for essentially
+# nothing. 0.95 = at least a 5% reduction.
+MIN_SIZE_REDUCTION_RATIO = 0.95
 
 
 class RadarrApp:
@@ -185,50 +192,87 @@ class RadarrApp:
         put_resp = self._client.put(f"/api/v3/movie/{movie_id}", json=movie)
         put_resp.raise_for_status()
 
-    def _trigger_search(self, movie_id: int) -> None:
-        resp = self._client.post("/api/v3/command", json={"name": "MoviesSearch", "movieIds": [movie_id]})
-        resp.raise_for_status()
+    def set_quality_profile(self, movie_id: int, quality_profile_id: int) -> None:
+        self._update_movie(movie_id, qualityProfileId=quality_profile_id)
 
-    def redownload_movie(
-        self, movie_id: int, movie_file_id: int | None, quality_profile_id: int | None = None
-    ) -> None:
-        """A movie Radarr currently has a file for: delete it and trigger a
-        fresh search -- the same net effect as deleting a movie's file in
-        Radarr's own UI and then searching for it. Deleting first, rather
-        than only searching, is deliberate: Radarr only replaces an
-        existing file when it judges a result a quality *upgrade*, and a
-        same-quality, smaller-size release typically isn't one -- a search
-        against a movie that still has a file can silently find nothing
-        to do.
-        """
-        if quality_profile_id is not None:
-            self._update_movie(movie_id, qualityProfileId=quality_profile_id)
-        if movie_file_id is not None:
-            self.delete_file(str(movie_file_id))
-        self._trigger_search(movie_id)
-
-    def monitor_and_search(self, movie_id: int, quality_profile_id: int | None = None) -> None:
+    def set_monitored(self, movie_id: int) -> None:
         """A movie Radarr already knows about but has lost its file for --
         typically relocarr's own earlier unmonitor + delete_file, once a
-        transfer completed (PLAN.md Section 5). There's no file left to
-        delete; re-monitoring it is what makes Radarr consider it missing
-        and worth searching for again.
+        transfer completed (PLAN.md Section 5). Re-monitoring it is what
+        makes Radarr consider it missing and worth searching for again.
         """
-        fields = {"monitored": True}
-        if quality_profile_id is not None:
-            fields["qualityProfileId"] = quality_profile_id
-        self._update_movie(movie_id, **fields)
-        self._trigger_search(movie_id)
+        self._update_movie(movie_id, monitored=True)
+
+    def find_smaller_release(self, movie_id: int, current_size_bytes: int) -> Release | None:
+        """Radarr's own interactive search (the same list its manual-search
+        UI shows) -- read-only, nothing is grabbed yet. Used instead of
+        just triggering an automatic MoviesSearch because Radarr's own
+        auto-pick has no concept of "smaller at the same quality": it only
+        ever replaces a file it judges a quality *upgrade*, so left to
+        itself it will either grab nothing (nothing looks like an upgrade)
+        or grab something that isn't actually smaller.
+
+        Radarr marks every candidate `rejected` once a movie already has a
+        file meeting its quality profile's cutoff, *regardless of size* --
+        "Existing file meets cutoff" / "...does not allow upgrades" are
+        exactly the rejections this method exists to override, since our
+        goal is a smaller file at the same approved quality, not a quality
+        upgrade. Any OTHER rejection reason (banned group, wrong language,
+        over the profile's own size cap, ...) is a real disqualifier and
+        is still respected. Among what's left, picks the smallest release
+        that beats `current_size_bytes` by at least MIN_SIZE_REDUCTION_RATIO,
+        or None if nothing qualifies -- the caller must not download
+        "sideways".
+        """
+        resp = self._client.get("/api/v3/release", params={"movieId": movie_id})
+        resp.raise_for_status()
+
+        candidates = []
+        for r in resp.json():
+            reasons = r.get("rejections") or []
+            disqualifying = [
+                reason
+                for reason in reasons
+                if "upgrade" not in reason.lower() and "cutoff" not in reason.lower()
+            ]
+            if disqualifying:
+                continue
+            if r["size"] >= current_size_bytes * MIN_SIZE_REDUCTION_RATIO:
+                continue
+            candidates.append(r)
+
+        if not candidates:
+            return None
+
+        best = min(candidates, key=lambda r: r["size"])
+        return Release(
+            guid=best["guid"], indexer_id=best["indexerId"], size_bytes=best["size"], title=best["title"]
+        )
+
+    def grab_release(self, release: Release) -> None:
+        resp = self._client.post(
+            "/api/v3/release", json={"guid": release.guid, "indexerId": release.indexer_id}
+        )
+        resp.raise_for_status()
 
     def lookup_and_add(
-        self, title: str, year: int, quality_profile_id: int, root_folder_path: str
+        self,
+        title: str,
+        year: int,
+        quality_profile_id: int,
+        root_folder_path: str,
+        *,
+        search_for_movie: bool = True,
     ) -> MovieMatch | None:
         """A file Radarr has never tracked at all -- most of a library that
         predates it. Looks the title/year up the same way Radarr's own "Add
-        New" search does, adds it monitored with a search queued
-        immediately, and returns the created movie, or None if the lookup
-        found nothing. The caller is responsible for choosing a sane
-        `quality_profile_id` -- there's no existing one to fall back to.
+        New" search does, adds it, and returns the created movie, or None
+        if the lookup found nothing. The caller is responsible for
+        choosing a sane `quality_profile_id` -- there's no existing one to
+        fall back to. `search_for_movie=False` adds it monitored without
+        queuing Radarr's own blind auto-search -- used by the Redownload
+        flow, which does its own size-aware search via
+        find_smaller_release + grab_release right after adding instead.
         """
         lookup_resp = self._client.get("/api/v3/movie/lookup", params={"term": f"{title} {year}"})
         lookup_resp.raise_for_status()
@@ -240,7 +284,7 @@ class RadarrApp:
         candidate["qualityProfileId"] = quality_profile_id
         candidate["rootFolderPath"] = root_folder_path
         candidate["monitored"] = True
-        candidate["addOptions"] = {"searchForMovie": True}
+        candidate["addOptions"] = {"searchForMovie": search_for_movie}
         add_resp = self._client.post("/api/v3/movie", json=candidate)
         add_resp.raise_for_status()
         added = add_resp.json()

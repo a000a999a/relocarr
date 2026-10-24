@@ -716,29 +716,66 @@ def _apply_redownload(
     matching Radarr action, returning a short human-readable outcome.
     Raises ValueError -- caught by the callers, never lets one bad file
     abort a bulk batch -- when there's nothing sensible to do: the
-    filename doesn't parse to a title/year, or it's a brand-new addition
-    and no quality profile was given (there's no existing one to fall
-    back to, unlike the other two actions).
+    filename doesn't parse to a title/year, it's a brand-new addition and
+    no quality profile was given (there's no existing one to fall back
+    to), or no release smaller than the current file can be found (see
+    RadarrApp.find_smaller_release) -- the whole point of this feature is
+    to shrink the library, so finding nothing better is a reason to do
+    nothing, not to grab whatever Radarr would've auto-picked.
     """
     action, match = _classify_redownload(file, by_path, by_title_year)
     name = file.get("name") or file.get("path", "")
+    current_size = file["size_bytes"]
+    current_gb = current_size / 1024**3
 
     if action == "replace":
-        client.redownload_movie(match.movie_id, match.movie_file_id, quality_profile_id)
-        return f"redownloaded {match.title or name}"
+        if quality_profile_id is not None:
+            client.set_quality_profile(match.movie_id, quality_profile_id)
+        release = client.find_smaller_release(match.movie_id, current_size)
+        if release is None:
+            raise ValueError(
+                f'"{name}": no release smaller than the current {current_gb:.2f} GB found -- nothing downloaded'
+            )
+        client.delete_file(str(match.movie_file_id))
+        client.grab_release(release)
+        return (
+            f"redownloading {match.title or name} "
+            f"({release.size_bytes / 1024**3:.2f} GB, was {current_gb:.2f} GB)"
+        )
 
     if action == "remonitor":
-        client.monitor_and_search(match.movie_id, quality_profile_id)
-        return f"re-monitored and searched {match.title or name}"
+        if quality_profile_id is not None:
+            client.set_quality_profile(match.movie_id, quality_profile_id)
+        client.set_monitored(match.movie_id)
+        release = client.find_smaller_release(match.movie_id, current_size)
+        if release is None:
+            raise ValueError(
+                f'"{name}": no release smaller than the current {current_gb:.2f} GB found -- nothing downloaded'
+            )
+        client.grab_release(release)
+        return (
+            f"redownloading {match.title or name} "
+            f"({release.size_bytes / 1024**3:.2f} GB, was {current_gb:.2f} GB)"
+        )
 
     if action == "add":
         if quality_profile_id is None:
             raise ValueError(f'"{name}" needs a quality profile picked -- Radarr never tracked it before')
         title, year = parse_title_year(name)
-        added = client.lookup_and_add(title, year, quality_profile_id, root_folder_path)
+        added = client.lookup_and_add(title, year, quality_profile_id, root_folder_path, search_for_movie=False)
         if added is None:
             raise ValueError(f'"{name}": no Radarr lookup match for "{title} ({year})"')
-        return f"added and searched {added.title}"
+        release = client.find_smaller_release(added.movie_id, current_size)
+        if release is None:
+            raise ValueError(
+                f'"{name}": added to Radarr, but no release smaller than the current '
+                f"{current_gb:.2f} GB found yet -- nothing downloaded"
+            )
+        client.grab_release(release)
+        return (
+            f"added and redownloading {added.title} "
+            f"({release.size_bytes / 1024**3:.2f} GB, was {current_gb:.2f} GB)"
+        )
 
     raise ValueError(f'"{name}": cannot tell its title/year from the filename')
 
@@ -763,6 +800,7 @@ def log_redownload(
     app_id: int = Form(...),
     path: str = Form(...),
     name: str = Form(...),
+    size_bytes: int = Form(...),
     quality_profile_id: str = Form(""),
     min_gb: float | None = Form(None),
     max_gb: float | None = Form(None),
@@ -772,9 +810,12 @@ def log_redownload(
     still-tracked file and searches, re-monitors a movie whose file Radarr
     already lost track of (relocarr's own earlier cleanup, typically), or
     looks the title up and adds it fresh -- same three cases as the bulk
-    version below. An explicit, one-off user click -- unlike the automated
-    import pipeline, this is NOT gated by the dry_run setting, the same way
-    /jobs/{id}/retry and /skip aren't.
+    version below. Every case only ever grabs a release smaller than the
+    current file (see RadarrApp.find_smaller_release) -- if nothing
+    smaller is available, nothing is downloaded, by design. An explicit,
+    one-off user click -- unlike the automated import pipeline, this is
+    NOT gated by the dry_run setting, the same way /jobs/{id}/retry and
+    /skip aren't.
     """
     with session(settings.db_path) as conn:
         app = conn.execute("SELECT * FROM apps WHERE id = ? AND kind = 'radarr'", (app_id,)).fetchone()
@@ -786,7 +827,12 @@ def log_redownload(
     try:
         by_path, by_title_year = client.build_movie_index()
         outcome = _apply_redownload(
-            client, app["staging_root"], {"path": path, "name": name}, by_path, by_title_year, profile_id
+            client,
+            app["staging_root"],
+            {"path": path, "name": name, "size_bytes": size_bytes},
+            by_path,
+            by_title_year,
+            profile_id,
         )
     except ValueError as exc:
         return RedirectResponse(_log_redirect_url(min_gb, max_gb, error=str(exc)), status_code=303)

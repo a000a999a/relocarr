@@ -264,3 +264,53 @@ def test_advance_copy_resets_backoff_bookkeeping_on_success(db_path, tmp_path):
     assert job["state"] == "PUBLISHED"
     assert job["retry_count"] == 0
     assert job["next_attempt_at"] is None
+
+
+def test_advance_clean_removes_a_larger_duplicate_sharing_title_and_year(db_path, tmp_path):
+    app_id = _insert_app(db_path)
+    movie_folder = tmp_path / "staging" / "Movie2024"
+    movie_folder.mkdir(parents=True)
+    source = movie_folder / "movie.mkv"
+
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+    target = target_dir / "Example Feature.1982.mp4"
+    target.write_bytes(b"x" * 100)  # the file this job just landed
+    old = target_dir / "Example Feature (1982).mkv"
+    old.write_bytes(b"x" * 999)  # an old, larger, untracked duplicate
+
+    job_id = _insert_job(
+        db_path, app_id, source_path=source, target_path=target, size_bytes=100, state="RECONCILED"
+    )
+
+    with session(db_path) as conn:
+        job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        advance_clean(conn, job)
+
+    assert not old.exists()
+    assert target.exists()
+    assert _get_job(db_path, job_id)["state"] == "DONE"
+
+
+def test_advance_clean_dry_run_does_not_remove_a_larger_duplicate(db_path, tmp_path):
+    app_id = _insert_app(db_path)
+    movie_folder = tmp_path / "staging" / "Movie2024"
+    movie_folder.mkdir(parents=True)
+    source = movie_folder / "movie.mkv"
+
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+    target = target_dir / "Example Feature.1982.mp4"
+    target.write_bytes(b"x" * 100)
+    old = target_dir / "Example Feature (1982).mkv"
+    old.write_bytes(b"x" * 999)
+
+    job_id = _insert_job(
+        db_path, app_id, source_path=source, target_path=target, size_bytes=100, state="RECONCILED"
+    )
+
+    with session(db_path) as conn:
+        job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        advance_clean(conn, job, dry_run=True)
+
+    assert old.exists()  # dry run -- nothing actually removed

@@ -24,20 +24,71 @@ SCAN_INTERVAL_SECONDS = 600.0
 # eliminate the underlying OS-level issue.
 SCAN_TIMEOUT_SECONDS = 60.0
 
-_TITLE_YEAR_RE = re.compile(r"^(.*?)\s*\((\d{4})\)\s*$")
+_TITLE_YEAR_PAREN_RE = re.compile(r"^(.*?)\s*\((\d{4})\)\s*$")
+_TITLE_YEAR_DOT_RE = re.compile(r"^(.*?)\.(\d{4})$")
 
 
 def parse_title_year(filename: str) -> tuple[str, int] | None:
-    """Pulls "Title" and 1982 out of "Title (1982).mkv" -- Radarr's own
-    flat-layout naming convention, confirmed against the real library
-    (e.g. "Example Feature (1982).mkv"). Returns None for
-    anything that doesn't match, rather than guessing.
+    """Pulls "Title" and 1982 out of a filename, in either of two naming
+    conventions confirmed against the real library: "Title (1982).mkv"
+    (the older, pre-relocarr files) or "Title.1982.mkv" (what this
+    instance's Radarr itself names a freshly grabbed/imported file --
+    confirmed live, 2026-10-24: a Redownload-triggered file lands in this
+    second format, so recognizing only the first missed every newly
+    redownloaded file's own title/year, including for
+    remove_larger_duplicates). Returns None for anything matching neither,
+    rather than guessing.
     """
     stem = Path(filename).stem
-    m = _TITLE_YEAR_RE.match(stem)
-    if not m:
-        return None
-    return m.group(1).strip(), int(m.group(2))
+    m = _TITLE_YEAR_PAREN_RE.match(stem)
+    if m:
+        return m.group(1).strip(), int(m.group(2))
+    m = _TITLE_YEAR_DOT_RE.match(stem)
+    if m:
+        return m.group(1).strip(), int(m.group(2))
+    return None
+
+
+def remove_larger_duplicates(target_path: Path, keep_size_bytes: int) -> list[str]:
+    """After a file lands successfully, remove any OTHER file in the same
+    folder that parses to the same (title, year) and is larger than it --
+    e.g. an old, oversized version that predates relocarr tracking this
+    movie at all. The Redownload feature's "add" action has no job record
+    of that old file's existence (Radarr never tracked it either), so
+    there's nothing that would otherwise replace it automatically; left
+    alone, a "smaller" redownload actually just adds a second, larger
+    file next to the first one -- the opposite of the goal.
+
+    Only ever removes something LARGER than what was just kept, and only
+    a same-(title, year) sibling -- never touches anything else in the
+    folder. Best-effort: one file failing to delete doesn't stop the rest.
+    """
+    parsed = parse_title_year(target_path.name)
+    if parsed is None:
+        return []
+
+    removed: list[str] = []
+    try:
+        siblings = list(target_path.parent.iterdir())
+    except OSError:
+        return []
+
+    for sibling in siblings:
+        if sibling == target_path:
+            continue
+        if sibling.suffix.lower() not in MOVIE_EXTENSIONS:
+            continue
+        if parse_title_year(sibling.name) != parsed:
+            continue
+        try:
+            if not sibling.is_file() or sibling.stat().st_size <= keep_size_bytes:
+                continue
+            sibling.unlink()
+            removed.append(sibling.name)
+        except OSError:
+            logger.exception("could not remove duplicate %s", sibling)
+
+    return removed
 
 
 def scan_movie_files(apps: list[sqlite3.Row]) -> tuple[list[dict], list[str]]:

@@ -3,7 +3,7 @@ import json
 import httpx
 import respx
 
-from relocarr.arr.base import MovieMatch, QualityProfile
+from relocarr.arr.base import MovieMatch, QualityProfile, Release
 from relocarr.arr.radarr import RadarrApp
 
 
@@ -77,87 +77,142 @@ def test_find_movie_by_file_path_returns_none_when_unmatched():
 
 
 @respx.mock
-def test_redownload_movie_deletes_file_and_triggers_search():
-    client = RadarrApp("http://radarr:7878", "key")
-    delete_route = respx.delete("http://radarr:7878/api/v3/moviefile/99").mock(
-        return_value=httpx.Response(200)
-    )
-    command_route = respx.post("http://radarr:7878/api/v3/command").mock(
-        return_value=httpx.Response(201, json={"id": 1})
-    )
-
-    client.redownload_movie(movie_id=42, movie_file_id=99)
-    client.close()
-
-    assert delete_route.called
-    assert command_route.called
-    sent = json.loads(command_route.calls.last.request.content)
-    assert sent == {"name": "MoviesSearch", "movieIds": [42]}
-
-
-@respx.mock
-def test_redownload_movie_updates_quality_profile_first_when_given():
+def test_set_quality_profile_updates_only_that_field():
     client = RadarrApp("http://radarr:7878", "key")
     respx.get("http://radarr:7878/api/v3/movie/42").mock(
-        return_value=httpx.Response(200, json={"id": 42, "qualityProfileId": 1, "title": "X"})
+        return_value=httpx.Response(200, json={"id": 42, "qualityProfileId": 1, "monitored": True, "title": "X"})
     )
     put_route = respx.put("http://radarr:7878/api/v3/movie/42").mock(return_value=httpx.Response(200))
-    respx.delete("http://radarr:7878/api/v3/moviefile/99").mock(return_value=httpx.Response(200))
-    respx.post("http://radarr:7878/api/v3/command").mock(return_value=httpx.Response(201))
 
-    client.redownload_movie(movie_id=42, movie_file_id=99, quality_profile_id=5)
+    client.set_quality_profile(42, 6)
     client.close()
 
     sent = json.loads(put_route.calls.last.request.content)
-    assert sent["qualityProfileId"] == 5
-
-
-@respx.mock
-def test_redownload_movie_skips_file_delete_when_no_file():
-    client = RadarrApp("http://radarr:7878", "key")
-    delete_route = respx.delete(url__regex=r".*/api/v3/moviefile/.*").mock(return_value=httpx.Response(200))
-    command_route = respx.post("http://radarr:7878/api/v3/command").mock(return_value=httpx.Response(201))
-
-    client.redownload_movie(movie_id=42, movie_file_id=None)
-    client.close()
-
-    assert not delete_route.called
-    assert command_route.called
-
-
-@respx.mock
-def test_monitor_and_search_sets_monitored_true_and_searches():
-    client = RadarrApp("http://radarr:7878", "key")
-    respx.get("http://radarr:7878/api/v3/movie/7").mock(
-        return_value=httpx.Response(200, json={"id": 7, "monitored": False, "qualityProfileId": 1, "title": "X"})
-    )
-    put_route = respx.put("http://radarr:7878/api/v3/movie/7").mock(return_value=httpx.Response(200))
-    command_route = respx.post("http://radarr:7878/api/v3/command").mock(return_value=httpx.Response(201))
-
-    client.monitor_and_search(movie_id=7)
-    client.close()
-
-    sent = json.loads(put_route.calls.last.request.content)
-    assert sent["monitored"] is True
-    assert "qualityProfileId" not in sent or sent["qualityProfileId"] == 1  # unchanged when not given
-    assert command_route.called
-
-
-@respx.mock
-def test_monitor_and_search_also_updates_quality_profile_when_given():
-    client = RadarrApp("http://radarr:7878", "key")
-    respx.get("http://radarr:7878/api/v3/movie/7").mock(
-        return_value=httpx.Response(200, json={"id": 7, "monitored": False, "qualityProfileId": 1, "title": "X"})
-    )
-    put_route = respx.put("http://radarr:7878/api/v3/movie/7").mock(return_value=httpx.Response(200))
-    respx.post("http://radarr:7878/api/v3/command").mock(return_value=httpx.Response(201))
-
-    client.monitor_and_search(movie_id=7, quality_profile_id=6)
-    client.close()
-
-    sent = json.loads(put_route.calls.last.request.content)
-    assert sent["monitored"] is True
     assert sent["qualityProfileId"] == 6
+    assert sent["monitored"] is True  # untouched
+
+
+@respx.mock
+def test_set_monitored_sets_monitored_true():
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/movie/7").mock(
+        return_value=httpx.Response(200, json={"id": 7, "monitored": False, "qualityProfileId": 1, "title": "X"})
+    )
+    put_route = respx.put("http://radarr:7878/api/v3/movie/7").mock(return_value=httpx.Response(200))
+
+    client.set_monitored(7)
+    client.close()
+
+    sent = json.loads(put_route.calls.last.request.content)
+    assert sent["monitored"] is True
+    assert sent["qualityProfileId"] == 1  # untouched
+
+
+@respx.mock
+def test_find_smaller_release_picks_the_smallest_non_rejected_candidate():
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/release").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "guid": "big",
+                    "indexerId": 1,
+                    "size": 4 * 1024**3,  # not smaller than current -- excluded
+                    "title": "Big Release",
+                    "rejections": [],
+                },
+                {
+                    "guid": "small-but-wrong-language",
+                    "indexerId": 1,
+                    "size": 1 * 1024**3,
+                    "title": "Small Wrong Language",
+                    "rejections": ["Unwanted language"],  # a real disqualifier -- excluded
+                },
+                {
+                    "guid": "smaller",
+                    "indexerId": 2,
+                    "size": int(1.5 * 1024**3),
+                    "title": "Smaller Release",
+                    "rejections": ["Existing file meets cutoff: HDTV-720p []"],  # override-able
+                },
+                {
+                    "guid": "smallest",
+                    "indexerId": 3,
+                    "size": 1 * 1024**3,
+                    "title": "Smallest Release",
+                    "rejections": [
+                        "Existing file and the Quality profile does not allow upgrades"
+                    ],  # also override-able
+                },
+            ],
+        )
+    )
+
+    result = client.find_smaller_release(movie_id=42, current_size_bytes=4 * 1024**3)
+    client.close()
+
+    assert result == Release(guid="smallest", indexer_id=3, size_bytes=1 * 1024**3, title="Smallest Release")
+
+
+@respx.mock
+def test_find_smaller_release_returns_none_when_nothing_is_meaningfully_smaller():
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/release").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "guid": "almost-same-size",
+                    "indexerId": 1,
+                    "size": int(4 * 1024**3 * 0.99),  # only 1% smaller -- not worth it
+                    "title": "Almost Same Size",
+                    "rejections": [],
+                }
+            ],
+        )
+    )
+
+    result = client.find_smaller_release(movie_id=42, current_size_bytes=4 * 1024**3)
+    client.close()
+
+    assert result is None
+
+
+@respx.mock
+def test_find_smaller_release_returns_none_when_everything_is_disqualified():
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/release").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "guid": "scene-release-banned",
+                    "indexerId": 1,
+                    "size": 1 * 1024**3,
+                    "title": "Banned Scene Release",
+                    "rejections": ["Scene release not allowed"],
+                }
+            ],
+        )
+    )
+
+    result = client.find_smaller_release(movie_id=42, current_size_bytes=4 * 1024**3)
+    client.close()
+
+    assert result is None
+
+
+@respx.mock
+def test_grab_release_posts_guid_and_indexer_id():
+    client = RadarrApp("http://radarr:7878", "key")
+    grab_route = respx.post("http://radarr:7878/api/v3/release").mock(return_value=httpx.Response(200))
+
+    client.grab_release(Release(guid="abc", indexer_id=3, size_bytes=100, title="X"))
+    client.close()
+
+    sent = json.loads(grab_route.calls.last.request.content)
+    assert sent == {"guid": "abc", "indexerId": 3}
 
 
 @respx.mock
@@ -202,7 +257,26 @@ def test_lookup_and_add_finds_the_matching_year_and_adds_it():
     assert sent["qualityProfileId"] == 6
     assert sent["rootFolderPath"] == "/staging/movies"
     assert sent["monitored"] is True
-    assert sent["addOptions"] == {"searchForMovie": True}
+    assert sent["addOptions"] == {"searchForMovie": True}  # default -- unchanged behavior for other callers
+
+
+@respx.mock
+def test_lookup_and_add_can_skip_radarrs_own_auto_search():
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/movie/lookup").mock(
+        return_value=httpx.Response(200, json=[{"title": "Example Feature", "year": 1982, "tmdbId": 1}])
+    )
+    add_route = respx.post("http://radarr:7878/api/v3/movie").mock(
+        return_value=httpx.Response(201, json={"id": 50, "title": "Example Feature", "qualityProfileId": 6})
+    )
+
+    client.lookup_and_add(
+        "Example Feature", 1982, quality_profile_id=6, root_folder_path="/s", search_for_movie=False
+    )
+    client.close()
+
+    sent = json.loads(add_route.calls.last.request.content)
+    assert sent["addOptions"] == {"searchForMovie": False}
 
 
 @respx.mock

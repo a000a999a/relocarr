@@ -60,13 +60,15 @@
   <span style="color: var(--text-dim); font-size: 11px;">check the files below you want, then submit -- nothing is redownloaded if nothing's checked</span>
 </form>
 <p style="margin: 0 0 12px; color: var(--text-dim); font-size: 12px;">
-  "Redownload" deletes a file Radarr still tracks and searches again. "Re-monitor &amp; search" is for a movie
-  relocarr (or you) already finished with -- Radarr lost track of the file, so there's nothing to delete, just
-  a fresh search. "Add &amp; search" is for a file Radarr has never heard of -- it looks the title up and adds
-  it, same as Radarr's own Add New screen. A quality profile picked here (or left blank to keep the current
-  one) is what actually enforces the size you want -- see Settings &rarr; Quality &rarr; Quality Definitions
-  in Radarr for the size caps a profile's qualities carry. Rows with an unparseable filename have no checkbox
-  -- there's nothing reliable to act on.
+  Every action here only ever grabs a release that's genuinely smaller than the current file -- if nothing
+  smaller turns up, nothing is downloaded. "Redownload" deletes a file Radarr still tracks and replaces it.
+  "Re-monitor &amp; search" is for a movie relocarr (or you) already finished with -- Radarr lost track of the
+  file, so there's nothing to delete, just a fresh search. "Add &amp; search" is for a file Radarr has never
+  heard of -- it looks the title up and adds it, same as Radarr's own Add New screen. A quality profile picked
+  here (or left blank to keep the current one) narrows which releases are even considered -- see Settings
+  &rarr; Quality &rarr; Quality Definitions in Radarr for the size caps a profile's qualities carry. Once a
+  smaller file lands, any old larger file sharing the same title/year gets removed automatically. Rows with an
+  unparseable filename have no checkbox -- there's nothing reliable to act on.
 </p>
 <table style="margin-bottom: 24px;">
   <tr><th></th><th>App</th><th>File</th><th>Size</th><th>Action</th></tr>
@@ -88,6 +90,7 @@
         <input type="hidden" name="app_id" value="{{ f.app_id }}">
         <input type="hidden" name="path" value="{{ f.path }}">
         <input type="hidden" name="name" value="{{ f.name }}">
+        <input type="hidden" name="size_bytes" value="{{ f.size_bytes }}">
         <input type="hidden" name="min_gb" value="{{ min_gb }}">
         {% if max_gb %}<input type="hidden" name="max_gb" value="{{ max_gb }}">{% endif %}
         <select name="quality_profile_id" style="font-size: 11px;">

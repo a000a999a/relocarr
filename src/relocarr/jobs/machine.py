@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from ..arr.base import ArrApp
+from ..library import remove_larger_duplicates
 from ..transfer.copier import rsync_copy, verify
 from ..transfer.health import probe_destination
 from ..transfer.layout import sidecar_paths
@@ -152,9 +153,20 @@ def advance_clean(conn: sqlite3.Connection, job: sqlite3.Row, *, dry_run: bool =
     """RECONCILED -> CLEANED: prune the now-empty per-movie/episode staging
     folder. Confirmed via spike 8 (2026-10-21) that no *arr setting does
     this -- it's entirely relocarr's own responsibility.
+
+    Also removes any larger, same-(title, year) sibling file sitting next
+    to the one this job just landed -- e.g. an old oversized file that
+    predates relocarr tracking that movie at all, which a Redownload
+    action has no other way to know existed (see library.py's
+    remove_larger_duplicates). A normal webhook-driven import can hit this
+    too, not just Redownload -- any newly-landed file can turn out to
+    share a title/year with an old untracked one already in the folder.
     """
     if dry_run:
         logger.info("[DRY RUN] would prune %s if empty", Path(job["source_path"]).parent)
+        logger.info(
+            "[DRY RUN] would remove any larger same-title/year duplicate of %s", job["target_path"]
+        )
         return
 
     folder = Path(job["source_path"]).parent
@@ -163,5 +175,10 @@ def advance_clean(conn: sqlite3.Connection, job: sqlite3.Row, *, dry_run: bool =
             folder.rmdir()
     except OSError:
         pass  # not empty (a sibling job's file still lives there) or already gone -- fine either way
+
+    removed = remove_larger_duplicates(Path(job["target_path"]), job["size_bytes"])
+    for name in removed:
+        logger.info("removed larger duplicate %r after landing %s", name, job["target_path"])
+
     _set_state(conn, job["id"], "CLEANED")
     _set_state(conn, job["id"], "DONE")

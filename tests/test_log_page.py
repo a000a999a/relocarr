@@ -1,3 +1,4 @@
+import json
 import time
 
 import httpx
@@ -263,8 +264,9 @@ def test_log_shows_unknown_for_an_unparseable_filename(client, tmp_path):
 
 
 @respx.mock
-def test_redownload_replace_deletes_and_searches_then_shows_result(client, tmp_path):
+def test_redownload_replace_deletes_and_grabs_a_smaller_release(client, tmp_path):
     app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-e")
+    current_size = 5 * 1024**3
 
     respx.get("http://radarr-e/api/v3/movie").mock(
         return_value=httpx.Response(
@@ -281,22 +283,71 @@ def test_redownload_replace_deletes_and_searches_then_shows_result(client, tmp_p
             ],
         )
     )
+    respx.get("http://radarr-e/api/v3/release").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "guid": "smaller-release",
+                    "indexerId": 2,
+                    "size": 2 * 1024**3,
+                    "title": "Smaller Release",
+                    "rejections": [],
+                }
+            ],
+        )
+    )
     delete_route = respx.delete("http://radarr-e/api/v3/moviefile/99").mock(return_value=httpx.Response(200))
-    command_route = respx.post("http://radarr-e/api/v3/command").mock(return_value=httpx.Response(201))
+    grab_route = respx.post("http://radarr-e/api/v3/release").mock(return_value=httpx.Response(200))
 
     resp = client.post(
         "/log/redownload",
-        data={"app_id": app_id, "path": "/t/Big.mkv", "name": "Big.mkv", "min_gb": "4"},
+        data={"app_id": app_id, "path": "/t/Big.mkv", "name": "Big.mkv", "size_bytes": current_size, "min_gb": "4"},
     )
     assert resp.status_code == 200
     assert delete_route.called
-    assert command_route.called
-    assert "redownloaded Big Movie" in resp.text
+    assert grab_route.called
+    assert "redownloading Big Movie" in resp.text
+    assert "2.00 GB" in resp.text
+    assert "was 5.00 GB" in resp.text
 
 
 @respx.mock
-def test_redownload_remonitor_sets_monitored_and_searches_no_file_to_delete(client, tmp_path):
+def test_redownload_replace_finds_nothing_smaller_does_not_delete_or_grab(client, tmp_path):
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-e2")
+    current_size = 5 * 1024**3
+
+    respx.get("http://radarr-e2/api/v3/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 42,
+                    "title": "Big Movie",
+                    "year": 2020,
+                    "qualityProfileId": 1,
+                    "monitored": True,
+                    "movieFile": {"id": 99, "path": "/t/Big.mkv"},
+                }
+            ],
+        )
+    )
+    respx.get("http://radarr-e2/api/v3/release").mock(return_value=httpx.Response(200, json=[]))
+    delete_route = respx.delete("http://radarr-e2/api/v3/moviefile/99").mock(return_value=httpx.Response(200))
+
+    resp = client.post(
+        "/log/redownload",
+        data={"app_id": app_id, "path": "/t/Big.mkv", "name": "Big.mkv", "size_bytes": current_size, "min_gb": "4"},
+    )
+    assert resp.status_code == 200
+    assert not delete_route.called  # found nothing better -- the existing file must survive
+    assert "no release smaller than the current 5.00 GB found" in resp.text
+
+
+@respx.mock
+def test_redownload_remonitor_grabs_smaller_release_no_file_to_delete(client, tmp_path):
     app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-f")
+    current_size = 5 * 1024**3
 
     respx.get("http://radarr-f/api/v3/movie").mock(
         return_value=httpx.Response(
@@ -318,8 +369,16 @@ def test_redownload_remonitor_sets_monitored_and_searches_no_file_to_delete(clie
         )
     )
     put_route = respx.put("http://radarr-f/api/v3/movie/7").mock(return_value=httpx.Response(200))
+    respx.get("http://radarr-f/api/v3/release").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"guid": "g", "indexerId": 1, "size": 2 * 1024**3, "title": "Smaller", "rejections": []}
+            ],
+        )
+    )
     delete_route = respx.delete(url__regex=r".*/api/v3/moviefile/.*").mock(return_value=httpx.Response(200))
-    command_route = respx.post("http://radarr-f/api/v3/command").mock(return_value=httpx.Response(201))
+    grab_route = respx.post("http://radarr-f/api/v3/release").mock(return_value=httpx.Response(200))
 
     resp = client.post(
         "/log/redownload",
@@ -327,19 +386,21 @@ def test_redownload_remonitor_sets_monitored_and_searches_no_file_to_delete(clie
             "app_id": app_id,
             "path": "/t/Example Feature (1982).mkv",
             "name": "Example Feature (1982).mkv",
+            "size_bytes": current_size,
             "min_gb": "4",
         },
     )
     assert resp.status_code == 200
     assert not delete_route.called  # nothing to delete -- Radarr already has no file for it
     assert put_route.called
-    assert command_route.called
-    assert "re-monitored and searched Example Feature" in resp.text
+    assert grab_route.called
+    assert "redownloading Example Feature" in resp.text
 
 
 @respx.mock
-def test_redownload_add_looks_up_and_adds_when_profile_given(client, tmp_path):
+def test_redownload_add_looks_up_adds_and_grabs_when_smaller_release_found(client, tmp_path):
     app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-g")
+    current_size = 5 * 1024**3
 
     respx.get("http://radarr-g/api/v3/movie").mock(return_value=httpx.Response(200, json=[]))
     respx.get("http://radarr-g/api/v3/movie/lookup").mock(
@@ -352,6 +413,15 @@ def test_redownload_add_looks_up_and_adds_when_profile_given(client, tmp_path):
             201, json={"id": 88, "title": "Some Untracked Movie", "qualityProfileId": 6, "year": 2015}
         )
     )
+    respx.get("http://radarr-g/api/v3/release").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"guid": "g", "indexerId": 1, "size": 2 * 1024**3, "title": "Smaller", "rejections": []}
+            ],
+        )
+    )
+    grab_route = respx.post("http://radarr-g/api/v3/release").mock(return_value=httpx.Response(200))
 
     resp = client.post(
         "/log/redownload",
@@ -359,13 +429,17 @@ def test_redownload_add_looks_up_and_adds_when_profile_given(client, tmp_path):
             "app_id": app_id,
             "path": "/t/Some Untracked Movie (2015).mkv",
             "name": "Some Untracked Movie (2015).mkv",
+            "size_bytes": current_size,
             "quality_profile_id": "6",
             "min_gb": "4",
         },
     )
     assert resp.status_code == 200
     assert add_route.called
-    assert "added and searched Some Untracked Movie" in resp.text
+    assert grab_route.called
+    sent = json.loads(add_route.calls.last.request.content)
+    assert sent["addOptions"] == {"searchForMovie": False}  # relocarr does its own size-aware search
+    assert "added and redownloading Some Untracked Movie" in resp.text
 
 
 @respx.mock
@@ -379,6 +453,7 @@ def test_redownload_add_without_a_profile_shows_error(client, tmp_path):
             "app_id": app_id,
             "path": "/t/Some Untracked Movie (2015).mkv",
             "name": "Some Untracked Movie (2015).mkv",
+            "size_bytes": 1000,
             "min_gb": "4",
         },
     )
@@ -393,7 +468,13 @@ def test_redownload_unparseable_filename_shows_error(client, tmp_path):
 
     resp = client.post(
         "/log/redownload",
-        data={"app_id": app_id, "path": "/t/no-year-here.mkv", "name": "no-year-here.mkv", "min_gb": "4"},
+        data={
+            "app_id": app_id,
+            "path": "/t/no-year-here.mkv",
+            "name": "no-year-here.mkv",
+            "size_bytes": 1000,
+            "min_gb": "4",
+        },
     )
     assert resp.status_code == 200
     assert "cannot tell its title/year" in resp.text
@@ -441,7 +522,12 @@ def test_redownload_bulk_acts_only_on_submitted_checkboxes(client, tmp_path):
     )
     respx.put("http://radarr-j/api/v3/movie/7").mock(return_value=httpx.Response(200))
     respx.delete(url__regex=r".*/api/v3/moviefile/.*").mock(return_value=httpx.Response(200))
-    respx.post("http://radarr-j/api/v3/command").mock(return_value=httpx.Response(201))
+    respx.get("http://radarr-j/api/v3/release").mock(
+        return_value=httpx.Response(
+            200, json=[{"guid": "g", "indexerId": 1, "size": 1 * 1024**3, "title": "Smaller", "rejections": []}]
+        )
+    )
+    respx.post("http://radarr-j/api/v3/release").mock(return_value=httpx.Response(200))
     # The POST redirects back to the same filtered /log view, which
     # re-enriches the list against Radarr -- mock that too.
     respx.get("http://radarr-j/api/v3/qualityprofile").mock(return_value=httpx.Response(200, json=[]))
@@ -498,7 +584,12 @@ def test_redownload_bulk_unchecking_a_box_leaves_that_file_untouched(client, tmp
         )
     )
     delete_route = respx.delete(url__regex=r".*/api/v3/moviefile/.*").mock(return_value=httpx.Response(200))
-    respx.post("http://radarr-k/api/v3/command").mock(return_value=httpx.Response(201))
+    respx.get("http://radarr-k/api/v3/release").mock(
+        return_value=httpx.Response(
+            200, json=[{"guid": "g", "indexerId": 1, "size": 1 * 1024**3, "title": "Smaller", "rejections": []}]
+        )
+    )
+    respx.post("http://radarr-k/api/v3/release").mock(return_value=httpx.Response(200))
 
     # Only "Keep.mkv"'s checkbox is submitted -- as if the user unchecked
     # "Unchecked.mkv" before clicking the bulk button.
