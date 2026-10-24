@@ -8,6 +8,18 @@ from relocarr.config import settings as app_settings
 from relocarr.db import init_db, session
 
 FIXTURES = Path(__file__).parent / "fixtures"
+CAPTURED_STAGING = "/home/user/Downloads/transmission/relocarr/movies"
+
+
+def _load_captured_payload(tmp_path) -> tuple[dict, str]:
+    """The captured fixture's paths point at the capture machine's staging tree;
+    re-root them under tmp_path so the test never touches (or depends on) the
+    real filesystem. Returns (payload, staging_root)."""
+    staging_root = str(tmp_path / "staging")
+    Path(staging_root).mkdir()
+    raw = (FIXTURES / "radarr_webhook_download_no_downloadid.json").read_text()
+    assert CAPTURED_STAGING in raw
+    return json.loads(raw.replace(CAPTURED_STAGING, staging_root)), staging_root
 
 
 @pytest.fixture
@@ -50,12 +62,7 @@ def test_webhook_rejects_unknown_app(client):
 
 
 def test_webhook_creates_job_from_real_captured_payload(client, tmp_path):
-    payload = json.loads((FIXTURES / "radarr_webhook_download_no_downloadid.json").read_text())
-
-    # The fixture's real source_path is under relocarr's staging tree from
-    # the live session; point staging_root at its actual parent so the
-    # layout computation resolves correctly.
-    staging_root = str(Path(payload["movieFile"]["path"]).parent.parent)
+    payload, staging_root = _load_captured_payload(tmp_path)
     app_id, token = _insert_app(staging_root)
 
     resp = client.post(f"/webhook/{app_id}", json=payload, headers={"X-Relocarr-Token": token})
@@ -73,8 +80,7 @@ def test_webhook_creates_job_from_real_captured_payload(client, tmp_path):
 
 
 def test_webhook_is_idempotent_for_retried_delivery(client, tmp_path):
-    payload = json.loads((FIXTURES / "radarr_webhook_download_no_downloadid.json").read_text())
-    staging_root = str(Path(payload["movieFile"]["path"]).parent.parent)
+    payload, staging_root = _load_captured_payload(tmp_path)
     app_id, token = _insert_app(staging_root)
 
     first = client.post(f"/webhook/{app_id}", json=payload, headers={"X-Relocarr-Token": token})
@@ -104,8 +110,7 @@ def test_webhook_creates_job_when_target_root_is_configured_but_not_mounted(clie
     # path (the Shield NAS, deliberately off). A job must still get
     # created -- destination availability belongs to the copy step
     # (Section 12's health probe + backoff), not webhook receipt.
-    payload = json.loads((FIXTURES / "radarr_webhook_download_no_downloadid.json").read_text())
-    staging_root = str(Path(payload["movieFile"]["path"]).parent.parent)
+    payload, staging_root = _load_captured_payload(tmp_path)
     unmounted_target = str(tmp_path / "mnt" / "nvidia" / "movies")
     assert not Path(unmounted_target).exists()
 
