@@ -20,6 +20,12 @@ from .base import (
 # nothing. 0.95 = at least a 5% reduction.
 MIN_SIZE_REDUCTION_RATIO = 0.95
 
+# A release with at least this many seeders is considered "healthy" and
+# outranks anything with fewer, regardless of size -- a torrent that won't
+# actually finish is worse than a slightly larger one that will. Below this
+# threshold is still eligible, just ranked lower (see find_smaller_release).
+MIN_SEEDERS_PREFERRED = 10
+
 
 class RadarrApp:
     """Radarr v3 API client. Endpoints and field names confirmed against a
@@ -219,10 +225,23 @@ class RadarrApp:
         goal is a smaller file at the same approved quality, not a quality
         upgrade. Any OTHER rejection reason (banned group, wrong language,
         over the profile's own size cap, ...) is a real disqualifier and
-        is still respected. Among what's left, picks the smallest release
-        that beats `current_size_bytes` by at least MIN_SIZE_REDUCTION_RATIO,
-        or None if nothing qualifies -- the caller must not download
-        "sideways".
+        is still respected.
+
+        Hard requirements (anything failing these is dropped entirely):
+        at least MIN_SIZE_REDUCTION_RATIO smaller than `current_size_bytes`
+        -- the caller must not download "sideways" -- and at least one
+        seeder, since a zero-seeder release can never actually finish.
+
+        Among what's left, ranked in this order (2026-10-24, matched to
+        how the user actually picks manually from Radarr's own search UI):
+        releases with >= MIN_SEEDERS_PREFERRED seeders beat everything
+        with fewer, but if nothing clears that bar the best-seeded of what
+        remains still wins rather than returning nothing (deliberately --
+        "if there's only a seeder for larger files, I accept a larger
+        file" still applies within the already-smaller-than-current set);
+        then higher resolution (1080p over 720p); then more seeders; then
+        smallest size as the final tiebreaker. Returns None only when
+        nothing meets the two hard requirements above.
         """
         resp = self._client.get("/api/v3/release", params={"movieId": movie_id})
         resp.raise_for_status()
@@ -239,12 +258,19 @@ class RadarrApp:
                 continue
             if r["size"] >= current_size_bytes * MIN_SIZE_REDUCTION_RATIO:
                 continue
+            if r.get("seeders", 0) <= 0:
+                continue
             candidates.append(r)
 
         if not candidates:
             return None
 
-        best = min(candidates, key=lambda r: r["size"])
+        def _rank(r: dict) -> tuple[bool, int, int, int]:
+            seeders = r.get("seeders", 0)
+            resolution = r.get("quality", {}).get("quality", {}).get("resolution", 0)
+            return (seeders >= MIN_SEEDERS_PREFERRED, resolution, seeders, -r["size"])
+
+        best = max(candidates, key=_rank)
         return Release(
             guid=best["guid"], indexer_id=best["indexerId"], size_bytes=best["size"], title=best["title"]
         )

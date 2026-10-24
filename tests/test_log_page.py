@@ -292,6 +292,7 @@ def test_redownload_replace_deletes_and_grabs_a_smaller_release(client, tmp_path
                     "indexerId": 2,
                     "size": 2 * 1024**3,
                     "title": "Smaller Release",
+                    "seeders": 50,
                     "rejections": [],
                 }
             ],
@@ -373,7 +374,7 @@ def test_redownload_remonitor_grabs_smaller_release_no_file_to_delete(client, tm
         return_value=httpx.Response(
             200,
             json=[
-                {"guid": "g", "indexerId": 1, "size": 2 * 1024**3, "title": "Smaller", "rejections": []}
+                {"guid": "g", "indexerId": 1, "size": 2 * 1024**3, "title": "Smaller", "seeders": 50, "rejections": []}
             ],
         )
     )
@@ -417,7 +418,7 @@ def test_redownload_add_looks_up_adds_and_grabs_when_smaller_release_found(clien
         return_value=httpx.Response(
             200,
             json=[
-                {"guid": "g", "indexerId": 1, "size": 2 * 1024**3, "title": "Smaller", "rejections": []}
+                {"guid": "g", "indexerId": 1, "size": 2 * 1024**3, "title": "Smaller", "seeders": 50, "rejections": []}
             ],
         )
     )
@@ -524,7 +525,8 @@ def test_redownload_bulk_acts_only_on_submitted_checkboxes(client, tmp_path):
     respx.delete(url__regex=r".*/api/v3/moviefile/.*").mock(return_value=httpx.Response(200))
     respx.get("http://radarr-j/api/v3/release").mock(
         return_value=httpx.Response(
-            200, json=[{"guid": "g", "indexerId": 1, "size": 1 * 1024**3, "title": "Smaller", "rejections": []}]
+            200,
+            json=[{"guid": "g", "indexerId": 1, "size": 1 * 1024**3, "title": "Smaller", "seeders": 50, "rejections": []}],
         )
     )
     respx.post("http://radarr-j/api/v3/release").mock(return_value=httpx.Response(200))
@@ -586,7 +588,8 @@ def test_redownload_bulk_unchecking_a_box_leaves_that_file_untouched(client, tmp
     delete_route = respx.delete(url__regex=r".*/api/v3/moviefile/.*").mock(return_value=httpx.Response(200))
     respx.get("http://radarr-k/api/v3/release").mock(
         return_value=httpx.Response(
-            200, json=[{"guid": "g", "indexerId": 1, "size": 1 * 1024**3, "title": "Smaller", "rejections": []}]
+            200,
+            json=[{"guid": "g", "indexerId": 1, "size": 1 * 1024**3, "title": "Smaller", "seeders": 50, "rejections": []}],
         )
     )
     respx.post("http://radarr-k/api/v3/release").mock(return_value=httpx.Response(200))

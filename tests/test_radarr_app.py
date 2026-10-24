@@ -108,6 +108,18 @@ def test_set_monitored_sets_monitored_true():
     assert sent["qualityProfileId"] == 1  # untouched
 
 
+def _release(guid, size, *, seeders=50, resolution=1080, rejections=None, title=None):
+    return {
+        "guid": guid,
+        "indexerId": 1,
+        "size": size,
+        "title": title or guid,
+        "seeders": seeders,
+        "quality": {"quality": {"resolution": resolution}},
+        "rejections": rejections or [],
+    }
+
+
 @respx.mock
 def test_find_smaller_release_picks_the_smallest_non_rejected_candidate():
     client = RadarrApp("http://radarr:7878", "key")
@@ -115,36 +127,25 @@ def test_find_smaller_release_picks_the_smallest_non_rejected_candidate():
         return_value=httpx.Response(
             200,
             json=[
-                {
-                    "guid": "big",
-                    "indexerId": 1,
-                    "size": 4 * 1024**3,  # not smaller than current -- excluded
-                    "title": "Big Release",
-                    "rejections": [],
-                },
-                {
-                    "guid": "small-but-wrong-language",
-                    "indexerId": 1,
-                    "size": 1 * 1024**3,
-                    "title": "Small Wrong Language",
-                    "rejections": ["Unwanted language"],  # a real disqualifier -- excluded
-                },
-                {
-                    "guid": "smaller",
-                    "indexerId": 2,
-                    "size": int(1.5 * 1024**3),
-                    "title": "Smaller Release",
-                    "rejections": ["Existing file meets cutoff: HDTV-720p []"],  # override-able
-                },
-                {
-                    "guid": "smallest",
-                    "indexerId": 3,
-                    "size": 1 * 1024**3,
-                    "title": "Smallest Release",
-                    "rejections": [
-                        "Existing file and the Quality profile does not allow upgrades"
-                    ],  # also override-able
-                },
+                _release("big", 4 * 1024**3, title="Big Release"),  # not smaller than current -- excluded
+                _release(
+                    "small-but-wrong-language",
+                    1 * 1024**3,
+                    title="Small Wrong Language",
+                    rejections=["Unwanted language"],  # a real disqualifier -- excluded
+                ),
+                _release(
+                    "smaller",
+                    int(1.5 * 1024**3),
+                    title="Smaller Release",
+                    rejections=["Existing file meets cutoff: HDTV-720p []"],  # override-able
+                ),
+                _release(
+                    "smallest",
+                    1 * 1024**3,
+                    title="Smallest Release",
+                    rejections=["Existing file and the Quality profile does not allow upgrades"],  # override-able
+                ),
             ],
         )
     )
@@ -152,7 +153,7 @@ def test_find_smaller_release_picks_the_smallest_non_rejected_candidate():
     result = client.find_smaller_release(movie_id=42, current_size_bytes=4 * 1024**3)
     client.close()
 
-    assert result == Release(guid="smallest", indexer_id=3, size_bytes=1 * 1024**3, title="Smallest Release")
+    assert result == Release(guid="smallest", indexer_id=1, size_bytes=1 * 1024**3, title="Smallest Release")
 
 
 @respx.mock
@@ -161,15 +162,8 @@ def test_find_smaller_release_returns_none_when_nothing_is_meaningfully_smaller(
     respx.get("http://radarr:7878/api/v3/release").mock(
         return_value=httpx.Response(
             200,
-            json=[
-                {
-                    "guid": "almost-same-size",
-                    "indexerId": 1,
-                    "size": int(4 * 1024**3 * 0.99),  # only 1% smaller -- not worth it
-                    "title": "Almost Same Size",
-                    "rejections": [],
-                }
-            ],
+            # only 1% smaller -- not worth it
+            json=[_release("almost-same-size", int(4 * 1024**3 * 0.99))],
         )
     )
 
@@ -185,15 +179,7 @@ def test_find_smaller_release_returns_none_when_everything_is_disqualified():
     respx.get("http://radarr:7878/api/v3/release").mock(
         return_value=httpx.Response(
             200,
-            json=[
-                {
-                    "guid": "scene-release-banned",
-                    "indexerId": 1,
-                    "size": 1 * 1024**3,
-                    "title": "Banned Scene Release",
-                    "rejections": ["Scene release not allowed"],
-                }
-            ],
+            json=[_release("scene-release-banned", 1 * 1024**3, rejections=["Scene release not allowed"])],
         )
     )
 
@@ -201,6 +187,106 @@ def test_find_smaller_release_returns_none_when_everything_is_disqualified():
     client.close()
 
     assert result is None
+
+
+@respx.mock
+def test_find_smaller_release_excludes_zero_seeder_releases():
+    # A dead torrent can never actually finish downloading.
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/release").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                _release("dead", 1 * 1024**3, seeders=0),
+                _release("alive", int(1.5 * 1024**3), seeders=5),
+            ],
+        )
+    )
+
+    result = client.find_smaller_release(movie_id=42, current_size_bytes=4 * 1024**3)
+    client.close()
+
+    assert result.guid == "alive"
+
+
+@respx.mock
+def test_find_smaller_release_prefers_healthy_seeders_over_smaller_size():
+    # A well-seeded larger release beats a barely-seeded smaller one --
+    # "if there's only a seeder for larger files, I accept a larger file".
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/release").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                _release("tiny-but-dead", int(1 * 1024**3), seeders=1),
+                _release("bigger-but-healthy", int(2.5 * 1024**3), seeders=50),
+            ],
+        )
+    )
+
+    result = client.find_smaller_release(movie_id=42, current_size_bytes=4 * 1024**3)
+    client.close()
+
+    assert result.guid == "bigger-but-healthy"
+
+
+@respx.mock
+def test_find_smaller_release_falls_back_to_best_seeded_when_none_are_healthy():
+    # Nothing clears the healthy-seeder bar -- still picks the best of
+    # what's available rather than returning None.
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/release").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                _release("two-seeders", int(1.5 * 1024**3), seeders=2),
+                _release("one-seeder", int(1 * 1024**3), seeders=1),
+            ],
+        )
+    )
+
+    result = client.find_smaller_release(movie_id=42, current_size_bytes=4 * 1024**3)
+    client.close()
+
+    assert result.guid == "two-seeders"
+
+
+@respx.mock
+def test_find_smaller_release_prefers_higher_resolution_among_equally_healthy_options():
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/release").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                _release("720p-smaller", int(1 * 1024**3), seeders=50, resolution=720),
+                _release("1080p-bigger", int(1.5 * 1024**3), seeders=50, resolution=1080),
+            ],
+        )
+    )
+
+    result = client.find_smaller_release(movie_id=42, current_size_bytes=4 * 1024**3)
+    client.close()
+
+    assert result.guid == "1080p-bigger"
+
+
+@respx.mock
+def test_find_smaller_release_picks_smallest_within_the_same_resolution_tier():
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/release").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                _release("1080p-bigger", int(2 * 1024**3), seeders=50, resolution=1080),
+                _release("1080p-smaller", int(1 * 1024**3), seeders=50, resolution=1080),
+            ],
+        )
+    )
+
+    result = client.find_smaller_release(movie_id=42, current_size_bytes=4 * 1024**3)
+    client.close()
+
+    assert result.guid == "1080p-smaller"
 
 
 @respx.mock
