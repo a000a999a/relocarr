@@ -32,6 +32,11 @@
           <button type="submit" style="margin-top:0; padding: 4px 10px; font-size: 12px; background: var(--btn-danger);">Skip</button>
         </form>
       {% endif %}
+      {% if job.state in ('IMPORTED', 'COPYING', 'NEEDS_ATTENTION') %}
+        <form method="post" action="/jobs/{{ job.id }}/abort" style="display:inline;">
+          <button type="submit" style="margin-top:0; padding: 4px 10px; font-size: 12px; background: var(--btn-danger);">Abort &amp; Delete</button>
+        </form>
+      {% endif %}
     </td>
   </tr>
   {% endfor %}

@@ -908,6 +908,64 @@ def job_skip(job_id: int):
     return RedirectResponse("/jobs", status_code=303)
 
 
+@router.post("/jobs/{job_id}/abort")
+def job_abort(job_id: int):
+    """Jobs page Abort & Delete button. For a job stuck before anything on
+    the *arr side has been touched yet (IMPORTED, COPYING, or
+    NEEDS_ATTENTION) -- deliberately not offered once PUBLISHED or later,
+    since the removal gate (jobs/worker.py) needs the job row to still
+    exist to correlate sibling jobs for torrent removal.
+
+    Best-effort deletes whatever rsync may have left at the destination:
+    rsync's --partial (transfer/copier.py) renames an interrupted
+    transfer's temp file to the real target filename rather than deleting
+    it, so a job stuck retrying can leave a corrupt, full-filename file
+    sitting at the destination -- left behind otherwise, looking like a
+    real (if oddly-sized) file to anything else reading that folder.
+
+    Safety check added after almost shipping a real bug (caught live,
+    2026-10-24, before it ran against production): a *different*, already-
+    completed job can target the exact same path -- e.g. a duplicate/retry
+    webhook for a movie that already copied successfully under a different
+    job id. Deleting "whatever's at target_path" unconditionally would
+    delete that other job's legitimate, finished file. So this only
+    deletes the destination file if no OTHER job has reached
+    VERIFIED/PUBLISHED/RECONCILED/CLEANED/DONE for that same path --
+    i.e. only when nothing else has a real claim on what's sitting there.
+
+    Cannot interrupt an rsync subprocess that's actively mid-transfer right
+    now -- it runs synchronously inside the scheduler's own background
+    thread (jobs/machine.py's advance_copy -> transfer/copier.py's
+    subprocess.run), with no handle exposed here to signal it. This only
+    ever prevents the *next* retry and cleans up after the fact.
+    """
+    with session(settings.db_path) as conn:
+        job = conn.execute(
+            "SELECT * FROM jobs WHERE id = ? AND state IN ('IMPORTED', 'COPYING', 'NEEDS_ATTENTION')",
+            (job_id,),
+        ).fetchone()
+        if job is None:
+            return RedirectResponse("/jobs", status_code=303)
+
+        other_claim = conn.execute(
+            """SELECT 1 FROM jobs WHERE target_path = ? AND id != ?
+               AND state IN ('VERIFIED', 'PUBLISHED', 'RECONCILED', 'CLEANED', 'DONE')""",
+            (job["target_path"], job_id),
+        ).fetchone()
+        if other_claim is None:
+            target = Path(job["target_path"])
+            try:
+                if target.exists():
+                    target.unlink()
+            except OSError:
+                logger.exception(
+                    "could not delete destination file for aborted job %r: %s", job_id, target
+                )
+
+        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+    return RedirectResponse("/jobs", status_code=303)
+
+
 # ----------------------------------------------------------------------
 # Setup Guide -- static reference content, PLAN.md Section 10's checklist
 # rendered in the UI. Most of the Radarr/Sonarr rows are also checked live
