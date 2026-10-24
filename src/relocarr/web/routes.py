@@ -18,6 +18,7 @@ from ..arr.payloads import parse_radarr_webhook, parse_sonarr_webhook
 from ..arr.preflight import evaluate_preflight
 from ..config import settings
 from ..db import session
+from ..disk_health import cache as disk_space_cache
 from ..library import cache as movie_library_cache
 from ..library import parse_title_year
 from ..transfer.layout import compute_target_path
@@ -92,9 +93,15 @@ def _sidebar_issues() -> dict:
 
     scan_status = _library_scan_status()
     unreachable_count = len(movie_library_cache.unreachable_roots)
+    disk_unreachable_count = sum(1 for e in disk_space_cache.entries.values() if not e["ok"])
 
-    count = needs_attention + (1 if scan_status["level"] != "ok" else 0) + unreachable_count
-    if needs_attention or scan_status["level"] == "error":
+    count = (
+        needs_attention
+        + (1 if scan_status["level"] != "ok" else 0)
+        + unreachable_count
+        + disk_unreachable_count
+    )
+    if needs_attention or scan_status["level"] == "error" or disk_unreachable_count:
         level = "error"
     elif count:
         level = "warning"
@@ -659,10 +666,14 @@ def transfer_log(
         if app["kind"] != "radarr" or not target_root or target_root in seen_target_roots:
             continue
         seen_target_roots.add(target_root)
-        try:
-            free = shutil.disk_usage(target_root).free
-        except OSError:
+        # Read-only lookup against disk_health's cache, never a live
+        # shutil.disk_usage() call here -- confirmed live, 2026-10-24, that
+        # a wedged network mount can hang that call indefinitely, which
+        # used to take this whole page down with it.
+        entry = disk_space_cache.entries.get(target_root)
+        if entry is None or not entry["ok"]:
             continue
+        free = entry["free"]
         capacity_projection.append(
             {
                 "label": app["name"],
@@ -936,6 +947,11 @@ def system_status(request: Request):
                 {"message": f"{app['name']}: unreachable -- {result.error}", "level": "error"}
             )
 
+    # Read-only lookup against disk_health's cache, never a live
+    # shutil.disk_usage() call here -- confirmed live, 2026-10-24, that a
+    # wedged network mount can hang that call indefinitely, which used to
+    # take this whole page down with it (along with /log's capacity
+    # projection, the only other place that used to call it directly).
     disk_space = []
     seen_paths: set[str] = set()
     for app in apps:
@@ -943,20 +959,24 @@ def system_status(request: Request):
             if not path or path in seen_paths:
                 continue
             seen_paths.add(path)
-            try:
-                usage = shutil.disk_usage(path)
+            entry = disk_space_cache.entries.get(path)
+            if entry is None:
+                disk_space.append(
+                    {"path": path, "label": f"{app['name']} ({label})", "ok": None}  # pending, not yet an error
+                )
+            elif entry["ok"]:
                 disk_space.append(
                     {
                         "path": path,
                         "label": f"{app['name']} ({label})",
-                        "free": usage.free,
-                        "total": usage.total,
+                        "free": entry["free"],
+                        "total": entry["total"],
                         "ok": True,
                     }
                 )
-            except OSError as exc:
+            else:
                 disk_space.append(
-                    {"path": path, "label": f"{app['name']} ({label})", "error": str(exc), "ok": False}
+                    {"path": path, "label": f"{app['name']} ({label})", "error": entry["error"], "ok": False}
                 )
 
     uptime_seconds = int(time.monotonic() - START_TIME)
@@ -980,5 +1000,10 @@ def system_status(request: Request):
                 else None
             ),
             "unreachable_roots": movie_library_cache.unreachable_roots,
+            "disk_checked_at": (
+                datetime.fromtimestamp(disk_space_cache.checked_at).strftime("%Y-%m-%d %H:%M:%S")
+                if disk_space_cache.checked_at
+                else None
+            ),
         },
     )

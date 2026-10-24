@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from relocarr.config import settings as app_settings
 from relocarr.db import init_db, session
+from relocarr.disk_health import cache as disk_space_cache
 from relocarr.library import cache as movie_library_cache
 
 
@@ -113,11 +114,40 @@ def test_system_page_shows_disk_space_for_configured_paths(client, tmp_path):
     app_id = _insert_app(str(staging))
     with session(app_settings.db_path) as conn:
         conn.execute("UPDATE apps SET target_root = ? WHERE id = ?", ("", app_id))
+    # The route only ever reads disk_space_cache now, never a live
+    # shutil.disk_usage() call -- see disk_health.py.
+    movie_library_cache.scanned_at = time.time()  # keep the sidebar badge quiet for this test
+    disk_space_cache.entries[str(staging)] = {"free": 10 * 1024**3, "total": 20 * 1024**3, "ok": True}
 
     resp = client.get("/system")
     assert resp.status_code == 200
     assert str(staging) in resp.text
     assert "GiB" in resp.text
+
+
+def test_system_page_shows_disk_space_as_pending_before_first_check(client, tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    app_id = _insert_app(str(staging))
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE apps SET target_root = ? WHERE id = ?", ("", app_id))
+
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "not checked yet" in resp.text
+
+
+def test_system_page_shows_disk_space_error_from_cache(client, tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    app_id = _insert_app(str(staging))
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE apps SET target_root = ? WHERE id = ?", ("", app_id))
+    disk_space_cache.entries[str(staging)] = {"ok": False, "error": "[Errno 112] Host is down"}
+
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "Host is down" in resp.text
 
 
 def test_setup_guide_renders(client):
@@ -187,3 +217,12 @@ def test_sidebar_badge_warns_before_the_first_scan(client):
     resp = client.get("/log")
     assert resp.status_code == 200
     assert 'class="nav-badge warning"' in resp.text
+
+
+def test_sidebar_badge_shows_error_for_unreachable_disk(client):
+    movie_library_cache.scanned_at = time.time()  # keep the scan signal quiet for this test
+    disk_space_cache.entries["/mnt/nvidia/movies"] = {"ok": False, "error": "Host is down"}
+
+    resp = client.get("/log")
+    assert resp.status_code == 200
+    assert 'class="nav-badge error"' in resp.text

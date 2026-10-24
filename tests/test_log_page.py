@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from relocarr.config import settings as app_settings
 from relocarr.db import init_db, session
+from relocarr.disk_health import cache as disk_space_cache
 from relocarr.library import cache as movie_library_cache
 
 
@@ -135,6 +136,11 @@ def test_log_capacity_projection_shown_for_radarr_target(client, tmp_path):
     target = tmp_path / "movies"
     target.mkdir()
     _insert_app("radarr", str(target))
+    # The route only ever reads disk_space_cache now -- it never calls
+    # shutil.disk_usage() itself (a wedged mount must not be able to hang
+    # this page; see disk_health.py), so the cache has to be pre-populated
+    # here the same way the real background loop would.
+    disk_space_cache.entries[str(target)] = {"free": 10 * 1024**3, "total": 20 * 1024**3, "ok": True}
 
     resp = client.get("/log")
     assert resp.status_code == 200

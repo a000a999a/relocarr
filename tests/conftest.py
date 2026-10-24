@@ -1,5 +1,6 @@
 import pytest
 
+from relocarr.disk_health import cache as disk_space_cache
 from relocarr.library import cache as movie_library_cache
 
 
@@ -21,3 +22,18 @@ def _reset_movie_library_cache():
     movie_library_cache.scanned_at = None
     movie_library_cache.unreachable_roots = []
     movie_library_cache.last_timeout_at = None
+
+
+@pytest.fixture(autouse=True)
+def _reset_disk_space_cache():
+    """Same reasoning as _reset_movie_library_cache: relocarr.disk_health.cache
+    is a module-level singleton the sidebar badge and /log /system both
+    read on every render.
+    """
+    disk_space_cache.entries = {}
+    disk_space_cache.checked_at = None
+    disk_space_cache.last_timeout_at = None
+    yield
+    disk_space_cache.entries = {}
+    disk_space_cache.checked_at = None
+    disk_space_cache.last_timeout_at = None

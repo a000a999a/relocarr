@@ -16,6 +16,11 @@
 {% endif %}
 
 <h1 style="font-size: 16px; margin: 24px 0 8px;">Disk Space</h1>
+<p style="color: var(--text-dim); font-size: 12px; margin: 0 0 8px;">
+  {% if disk_checked_at %}Checked {{ disk_checked_at }} (refreshes in the background every 60s --
+  never checked live on page load, so a dead mount can't hang this page).
+  {% else %}Checking for the first time -- figures below will appear shortly.{% endif %}
+</p>
 {% if disk_space %}
 <table>
   <tr><th>Location</th><th>Path</th><th>Free</th><th>Total</th><th style="width: 160px;"></th></tr>
@@ -31,6 +36,8 @@
         <div style="background: var(--accent); height: 100%; width: {{ (100 - (d.free / d.total * 100)) | round(0) }}%;"></div>
       </div>
     </td>
+    {% elif d.ok is none %}
+    <td colspan="3" style="color: var(--text-dim);">not checked yet</td>
     {% else %}
     <td colspan="3" style="color: var(--btn-danger);">{{ d.error }}</td>
     {% endif %}
