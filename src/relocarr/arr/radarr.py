@@ -26,6 +26,14 @@ MIN_SIZE_REDUCTION_RATIO = 0.95
 # threshold is still eligible, just ranked lower (see find_smaller_release).
 MIN_SEEDERS_PREFERRED = 10
 
+# Radarr's interactive search (GET /api/v3/release) queries every configured
+# indexer live before responding -- confirmed live, 2026-10-24, that this can
+# genuinely take longer than the client's normal 10s default (a real search
+# timed out and was misreported to the user as "Could not reach Radarr",
+# when Radarr was never actually unreachable). Only this one call gets the
+# longer budget; everything else stays fast-failing at the normal default.
+RELEASE_SEARCH_TIMEOUT_SECONDS = 60.0
+
 
 class RadarrApp:
     """Radarr v3 API client. Endpoints and field names confirmed against a
@@ -243,7 +251,9 @@ class RadarrApp:
         smallest size as the final tiebreaker. Returns None only when
         nothing meets the two hard requirements above.
         """
-        resp = self._client.get("/api/v3/release", params={"movieId": movie_id})
+        resp = self._client.get(
+            "/api/v3/release", params={"movieId": movie_id}, timeout=RELEASE_SEARCH_TIMEOUT_SECONDS
+        )
         resp.raise_for_status()
 
         candidates = []

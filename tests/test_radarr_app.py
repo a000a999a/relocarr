@@ -1,10 +1,11 @@
 import json
+from unittest.mock import patch
 
 import httpx
 import respx
 
 from relocarr.arr.base import MovieMatch, QualityProfile, Release
-from relocarr.arr.radarr import RadarrApp
+from relocarr.arr.radarr import RELEASE_SEARCH_TIMEOUT_SECONDS, RadarrApp
 
 
 @respx.mock
@@ -118,6 +119,24 @@ def _release(guid, size, *, seeders=50, resolution=1080, rejections=None, title=
         "quality": {"quality": {"resolution": resolution}},
         "rejections": rejections or [],
     }
+
+
+@respx.mock
+def test_find_smaller_release_uses_a_longer_timeout_for_the_live_indexer_search():
+    # Confirmed live, 2026-10-24: a real release search can take longer
+    # than the client's normal 10s default (Radarr queries every indexer
+    # live before responding), and the resulting timeout was misreported
+    # to the user as "Could not reach Radarr" when Radarr was never
+    # actually down.
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/release").mock(return_value=httpx.Response(200, json=[]))
+
+    with patch.object(client._client, "get", wraps=client._client.get) as mock_get:
+        client.find_smaller_release(movie_id=42, current_size_bytes=1000)
+    client.close()
+
+    _, kwargs = mock_get.call_args
+    assert kwargs["timeout"] == RELEASE_SEARCH_TIMEOUT_SECONDS
 
 
 @respx.mock
