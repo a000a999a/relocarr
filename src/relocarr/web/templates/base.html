@@ -89,8 +89,8 @@
 <body>
   <nav class="sidebar">
     <div class="logo"><img src="/static/favicon.svg" width="48" height="48" alt=""> RELOCARR</div>
-    <a href="/log" class="{% block nav_log %}{% endblock %}">Log</a>
-    <a href="/jobs" class="{% block nav_jobs %}{% endblock %}">Jobs</a>
+    <a href="/log" class="{% block nav_log %}{% endblock %}">Library</a>
+    <a href="/jobs" class="{% block nav_jobs %}{% endblock %}">Queue</a>
     <a href="/settings/apps" class="{% block nav_settings %}{% endblock %}">Settings</a>
     {% if request.url.path.startswith('/settings') %}
     <a href="/settings/apps/new" class="sub {% block nav_settings_add_app %}{% endblock %}">Add App</a>
