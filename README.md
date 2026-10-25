@@ -56,6 +56,43 @@ for the full list of settings.
 
 See the in-app **Setup Guide** page for the full Radarr/Sonarr/Transmission checklist.
 
+## Using it
+
+### Jobs
+
+One row per imported file, moving through: `IMPORTED` → `COPYING` → `VERIFIED` → `PUBLISHED` →
+`RECONCILED` → `DONE` (see PLAN.md §5 for what each step actually does). A job stuck on a
+transient failure retries itself with backoff; one that needs a human shows `NEEDS_ATTENTION`
+with **Retry**, **Skip**, or **Abort & Delete**.
+
+Three maintenance tools live on this page, each a safety net for something the automatic
+pipeline can miss:
+
+- **Find completed torrents still in Transmission** — a `DONE` job's torrent is normally removed
+  automatically once every file sharing that download is reconciled (the removal gate, PLAN.md
+  §5), but a stuck sibling or a missing download client can leave it sitting there. Lists every
+  torrent that's both finished and backed by a `DONE` job, and mass-deletes the checked ones
+  (through Transmission's own API, so it's stopped cleanly first).
+- **Find transferred movies on source** — same idea, but for the file itself rather than the
+  torrent entry: any `DONE` job whose source file is still physically sitting in staging. Still
+  seeding in Transmission → removed through Transmission; otherwise deleted straight off disk.
+- **Find untracked Radarr imports** — the whole pipeline starts from Radarr's "Download" webhook;
+  if that webhook never arrives (confirmed live, 2026-10-25 — a missed delivery during a relocarr
+  restart left real imports sitting in staging with no job at all, never copied anywhere) nothing
+  else would ever notice. Scans Radarr's own movie list directly for a file with no matching job
+  and creates one — from there it's picked up by the normal pipeline like any other import.
+
+### Log
+
+Transfer history, a free-space projection, and a size summary of the movie library actually on
+disk (not just relocarr's own job history, which only covers files it personally moved). Clicking
+a size bucket lists every file in that range with its Radarr poster, the date it landed (so you
+can tell a recent redownload from an old file at a glance), and a **Redownload** action — per
+file or in bulk — that only ever grabs a release genuinely smaller than the current one at the
+same quality (ranked by seeders, then resolution; see `arr/radarr.py`'s `find_smaller_release`).
+Nothing downloads if nothing smaller turns up. Once a smaller file lands, any older/larger file
+sharing the same title and year is removed automatically.
+
 ## Security
 
 **The web UI has no login yet** (planned — see PLAN.md's Settings section). Anyone who can reach

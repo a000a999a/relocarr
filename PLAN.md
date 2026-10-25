@@ -672,3 +672,50 @@ downloads so hardlinks work), destination on the network share.
   (Leaning: automatic, with a confirmation.)
 * Publish a prebuilt image (GHCR) once v0.1 has settled, so `install.sh` doesn't need to build
   from source on every machine?
+
+## 19. Post-v0.1 feature additions (2026-10-24/25)
+
+Built in production against the real deployment (§17), not from the roadmap above — each one
+driven by a real operational problem hit while actually running the v0.1 pipeline day to day.
+
+**Redownload (Log page).** The Log page's size-filtered file list can trigger Radarr to replace
+an oversized file with a smaller one at the same quality — per file or in bulk. Deliberately
+**not** a blind `MoviesSearch`: Radarr's own auto-pick only ever replaces a file it judges a
+quality *upgrade*, so left to itself it finds nothing for "smaller, same quality." Instead uses
+Radarr's interactive search (`GET /api/v3/release`, the same list its manual-search UI shows),
+overriding only the "existing file meets cutoff" rejection, and ranks candidates to match how they
+were actually being picked by hand: zero-seeder releases excluded outright, then ranked by
+seeder health (≥10 seeders beats anything below, but the best-seeded option still wins if
+nothing clears that bar), then resolution, then seeder count, then smallest size
+(`arr/radarr.py`'s `find_smaller_release`). Nothing is downloaded if nothing smaller turns up.
+Once a smaller file lands, any older/larger file sharing the same (title, year) is removed
+automatically (`library.py`'s `remove_larger_duplicates`), closing the gap left by Radarr's own
+file tracking not knowing about a pre-relocarr duplicate.
+
+**Log page: file age and poster (2026-10-25).** The same filtered file list now shows each
+file's modification time (Linux has no true file-birth-time field via plain `os.stat()`; for a
+file written once and never touched again, mtime is close enough) and a poster thumbnail pulled
+from Radarr's own movie index (the TMDB-hosted `remoteUrl`, so the browser loads it directly, no
+Radarr auth needed) — both to make it obvious at a glance whether a file was recently
+redownloaded, without having to click into Radarr to check.
+
+**Jobs page maintenance tools (2026-10-25).** Three manual fallbacks, each covering a gap the
+automatic pipeline (§5's removal gate, the webhook-driven job setup) can leave behind in
+practice:
+
+- *Find completed torrents still in Transmission* — the removal gate only removes a torrent once
+  every job sharing that download reaches `RECONCILED`; a stuck sibling, a torrent removed from
+  Transmission out-of-band, or no download client configured each leave it seeding indefinitely
+  with nothing left to retrigger the gate.
+- *Find transferred movies on source* — same gap, from the file's side: a `DONE` job whose
+  staging file is still on disk (Radarr's own `delete_file` API normally removes it during
+  `RECONCILED`, but not reliably in every case). Still-seeding files are removed through
+  Transmission (stopped first); everything else is deleted directly.
+- *Find untracked Radarr imports* — confirmed live, 2026-10-25: a missed webhook delivery (no
+  retry on Radarr's side) left movies Radarr had fully imported with **no relocarr job at all**,
+  never copied to the target — 31 found on the first run. Scans Radarr's live movie list
+  directly (not relocarr's own job history, which is exactly what's incomplete here) for a file
+  with no matching job and backfills one, computed the same way the webhook handler would have.
+  `download_id` is left `NULL` for these (no reliable way to recover which torrent produced a
+  file from Radarr's movie API alone), so they rely on the two tools above as their own fallback
+  if a torrent is still sitting around for one of them.
