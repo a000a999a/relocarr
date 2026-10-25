@@ -1,7 +1,17 @@
 # relocarr
+Connects Radarr, Sonarr, Transmission, Plex.
+Radarr & Sonarr hand over the torrent file to Transmission.
+Transmission performs the download.
+Radarr / Sonarr perform the renaming. 
 
-Hands finished Radarr and Sonarr imports over to your NAS or custom layout, then cleans up the
-download client. See [PLAN.md](PLAN.md) for the full design and the rationale behind it.
+Relocarr End to End
+1: controlls the transfer to NAS (i.e. Plex) - for movies flat folder structure and series following the series, episode folder structure
+2: Cleans up finished downloads from Transmission (deletes finished torrent entries)
+2: it can re-downloads a smaller version if you like to improve space on your disk
+3: it can delete duplicates from your NAS
+
+See [PLAN.md](PLAN.md) for the full design and the rationale behind it.
+
 
 **Status: v1.0.0 — stable, running real production traffic since v0.1.0.** Every core piece
 (webhook receiver, job state machine, removal gate, download-client watcher, scheduler, Preflight
