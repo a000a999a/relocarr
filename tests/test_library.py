@@ -206,6 +206,26 @@ def test_find_duplicate_groups_ignores_unparseable_filenames():
     assert find_duplicate_groups(files) == []
 
 
+def test_find_duplicate_groups_matches_title_case_insensitively():
+    # Confirmed live, 2026-10-25: "Silver Creek" and "Silver creek" are
+    # the same movie, capitalized differently between two real releases.
+    files = [_file("Silver Creek (1968).mkv", 3), _file("Silver creek.1968.mkv", 2)]
+
+    groups = find_duplicate_groups(files)
+
+    assert len(groups) == 1
+    assert {f["name"] for f in groups[0]} == {"Silver Creek (1968).mkv", "Silver creek.1968.mkv"}
+
+
+def test_find_duplicate_groups_does_not_merge_different_years():
+    # A capitalization slip is still the same movie; a different year is
+    # at least as likely to mean a genuinely different film (a remake) --
+    # merging those silently would risk a false positive a reviewer could
+    # easily miss, so year stays an exact match.
+    files = [_file("Example Feature (2009).mkv", 3), _file("Example Feature.2010.mkv", 2)]
+    assert find_duplicate_groups(files) == []
+
+
 def test_remove_larger_duplicates_removes_an_older_oversized_sibling(tmp_path):
     kept = tmp_path / "Example Feature.1982.mp4"
     kept.write_bytes(b"x" * 100)

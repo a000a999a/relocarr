@@ -104,13 +104,24 @@ def find_duplicate_groups(files: list[dict]) -> list[list[dict]]:
     larger file isn't always worth keeping either). Each group's files
     are sorted largest first, so the one most likely worth deleting is
     the first thing a reviewer sees.
+
+    Title is compared case-insensitively -- confirmed live, 2026-10-25,
+    against a real library: "Silver Creek" and "Silver creek" are the
+    exact same movie, just capitalized differently between two releases,
+    and a case-sensitive match missed the pair entirely (same convention
+    already used by arr/radarr.py's own by_title_year index). Year is
+    still compared exactly -- unlike a capitalization slip, two different
+    years is at least as likely to mean two different movies (a remake)
+    as a mistagged release, so silently merging those would risk a false
+    positive a reviewer could easily miss.
     """
     groups: dict[tuple[str, int], list[dict]] = {}
     for f in files:
         parsed = parse_title_year(f.get("name", ""))
         if parsed is None:
             continue
-        groups.setdefault(parsed, []).append(f)
+        title, year = parsed
+        groups.setdefault((title.lower(), year), []).append(f)
     return [
         sorted(g, key=lambda f: f["size_bytes"], reverse=True) for g in groups.values() if len(g) > 1
     ]
