@@ -672,6 +672,8 @@ downloads so hardlinks work), destination on the network share.
   (Leaning: automatic, with a confirmation.)
 * Publish a prebuilt image (GHCR) once v0.1 has settled, so `install.sh` doesn't need to build
   from source on every machine?
+* Check why the System page's "Apps configured" count only shows 2 when Transmission and Plex
+  are also configured (added 2026-10-25, not investigated yet).
 
 ## 19. Post-v0.1 feature additions (2026-10-24/25)
 
