@@ -127,6 +127,67 @@ def test_abort_is_not_available_once_published(client):
     assert job["state"] == "PUBLISHED"
 
 
+def test_jobs_filter_by_state_shows_only_matching_jobs(client):
+    _insert_app_and_job("NEEDS_ATTENTION", target_path="/t/needs.mkv")
+    _insert_app_and_job("DONE", target_path="/t/done.mkv")
+
+    resp = client.get("/jobs?state=DONE")
+    assert resp.status_code == 200
+    assert "done.mkv" in resp.text
+    assert "needs.mkv" not in resp.text
+
+
+def test_jobs_filter_by_app_shows_only_matching_jobs(client):
+    app1_id, _ = _insert_app_and_job("NEEDS_ATTENTION", target_path="/t/app1.mkv")
+    _insert_app_and_job("NEEDS_ATTENTION", target_path="/t/app2.mkv")
+
+    resp = client.get(f"/jobs?app_id={app1_id}")
+    assert resp.status_code == 200
+    assert "app1.mkv" in resp.text
+    assert "app2.mkv" not in resp.text
+
+
+def test_jobs_filter_by_target_substring(client):
+    _insert_app_and_job("NEEDS_ATTENTION", target_path="/t/TestMovieOne.2014.mkv")
+    _insert_app_and_job("NEEDS_ATTENTION", target_path="/t/Dune.2021.mkv")
+
+    resp = client.get("/jobs?target=TestMovieOne")
+    assert resp.status_code == 200
+    assert "TestMovieOne" in resp.text
+    assert "Dune.2021.mkv" not in resp.text
+
+
+def test_jobs_filter_error_only(client):
+    with session(app_settings.db_path) as conn:
+        app_id = conn.execute(
+            """INSERT INTO apps (kind, name, base_url, api_key, webhook_token, staging_root, target_root)
+               VALUES ('radarr', 'Radarr', 'http://x', 'key', 'token', '/s', '/t')"""
+        ).lastrowid
+        conn.execute(
+            """INSERT INTO jobs (app_id, download_id, media_file_id, unmonitor_id, source_path, target_path, size_bytes, state, error)
+               VALUES (?, NULL, 'f1', 1, '/s/a.mkv', '/t/no-error.mkv', 1000, 'DONE', NULL)""",
+            (app_id,),
+        )
+        conn.execute(
+            """INSERT INTO jobs (app_id, download_id, media_file_id, unmonitor_id, source_path, target_path, size_bytes, state, error)
+               VALUES (?, NULL, 'f2', 1, '/s/b.mkv', '/t/with-error.mkv', 1000, 'NEEDS_ATTENTION', 'boom')""",
+            (app_id,),
+        )
+
+    resp = client.get("/jobs?error_only=true")
+    assert resp.status_code == 200
+    assert "with-error.mkv" in resp.text
+    assert "no-error.mkv" not in resp.text
+
+
+def test_jobs_empty_state_differs_when_filters_active(client):
+    _insert_app_and_job("DONE", target_path="/t/a.mkv")
+
+    resp = client.get("/jobs?state=NEEDS_ATTENTION")
+    assert resp.status_code == 200
+    assert "No jobs match these filters." in resp.text
+
+
 def test_jobs_list_shows_abort_button_for_copying_job(client):
     _insert_app_and_job("COPYING")
     resp = client.get("/jobs")

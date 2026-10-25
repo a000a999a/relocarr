@@ -510,15 +510,60 @@ def webhook(
 # ----------------------------------------------------------------------
 
 
+JOB_STATES = (
+    "IMPORTED",
+    "COPYING",
+    "VERIFIED",
+    "PUBLISHED",
+    "RECONCILED",
+    "CLEANED",
+    "DONE",
+    "NEEDS_ATTENTION",
+    "SKIPPED",
+)
+
+
 @router.get("/jobs")
-def jobs_list(request: Request):
+def jobs_list(
+    request: Request,
+    app_id: int | None = None,
+    state: str | None = None,
+    target: str | None = None,
+    error_only: bool = False,
+):
     with session(settings.db_path) as conn:
-        jobs = conn.execute(
-            """SELECT jobs.*, apps.name AS app_name FROM jobs
-               JOIN apps ON apps.id = jobs.app_id
-               ORDER BY jobs.updated_at DESC LIMIT 200"""
-        ).fetchall()
-    return templates.TemplateResponse(request, "jobs.html", {"jobs": jobs})
+        apps = conn.execute("SELECT * FROM apps ORDER BY name").fetchall()
+
+        query = """SELECT jobs.*, apps.name AS app_name FROM jobs
+                   JOIN apps ON apps.id = jobs.app_id WHERE 1=1"""
+        params: list = []
+        if app_id:
+            query += " AND jobs.app_id = ?"
+            params.append(app_id)
+        if state:
+            query += " AND jobs.state = ?"
+            params.append(state)
+        if target:
+            query += " AND jobs.target_path LIKE ?"
+            params.append(f"%{target}%")
+        if error_only:
+            query += " AND jobs.error IS NOT NULL"
+        query += " ORDER BY jobs.updated_at DESC LIMIT 200"
+        jobs = conn.execute(query, params).fetchall()
+
+    return templates.TemplateResponse(
+        request,
+        "jobs.html",
+        {
+            "jobs": jobs,
+            "apps": apps,
+            "job_states": JOB_STATES,
+            "filter_app_id": app_id,
+            "filter_state": state,
+            "filter_target": target,
+            "filter_error_only": error_only,
+        },
+    )
 
 
 SIZE_BUCKET_THRESHOLDS_GB = (2.5, 3, 4)
@@ -598,6 +643,9 @@ def _enrich_with_radarr_matches(apps, files: list[dict]) -> None:
         f["quality_profiles"] = profiles_by_app[app_id]
 
 
+TRANSFER_LOG_STATES = ("DONE", "NEEDS_ATTENTION", "SKIPPED")
+
+
 @router.get("/log")
 def transfer_log(
     request: Request,
@@ -605,6 +653,9 @@ def transfer_log(
     max_gb: float | None = None,
     redownload_error: str | None = None,
     redownload_result: str | None = None,
+    log_app_id: int | None = None,
+    log_state: str | None = None,
+    log_error_only: bool = False,
 ):
     """Historical record of finished transfer attempts -- success
     (DONE), failed (NEEDS_ATTENTION), or skipped (SKIPPED) -- each with the
@@ -623,12 +674,21 @@ def transfer_log(
     """
     with session(settings.db_path) as conn:
         apps = conn.execute("SELECT * FROM apps").fetchall()
-        entries = conn.execute(
-            """SELECT jobs.*, apps.name AS app_name FROM jobs
-               JOIN apps ON apps.id = jobs.app_id
-               WHERE jobs.state IN ('DONE', 'NEEDS_ATTENTION', 'SKIPPED')
-               ORDER BY jobs.updated_at DESC LIMIT 500"""
-        ).fetchall()
+
+        entries_query = """SELECT jobs.*, apps.name AS app_name FROM jobs
+                            JOIN apps ON apps.id = jobs.app_id
+                            WHERE jobs.state IN ('DONE', 'NEEDS_ATTENTION', 'SKIPPED')"""
+        entries_params: list = []
+        if log_app_id:
+            entries_query += " AND jobs.app_id = ?"
+            entries_params.append(log_app_id)
+        if log_state:
+            entries_query += " AND jobs.state = ?"
+            entries_params.append(log_state)
+        if log_error_only:
+            entries_query += " AND jobs.error IS NOT NULL"
+        entries_query += " ORDER BY jobs.updated_at DESC LIMIT 500"
+        entries = conn.execute(entries_query, entries_params).fetchall()
 
     movie_files = movie_library_cache.files
     size_buckets = [
@@ -700,6 +760,11 @@ def transfer_log(
             "filtered_movie_files": filtered_movie_files,
             "redownload_error": redownload_error,
             "redownload_result": redownload_result,
+            "apps": apps,
+            "transfer_log_states": TRANSFER_LOG_STATES,
+            "filter_log_app_id": log_app_id,
+            "filter_log_state": log_state,
+            "filter_log_error_only": log_error_only,
             "library_scanned_at": (
                 datetime.fromtimestamp(movie_library_cache.scanned_at).strftime("%Y-%m-%d %H:%M:%S")
                 if movie_library_cache.scanned_at

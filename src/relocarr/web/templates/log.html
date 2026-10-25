@@ -3,6 +3,14 @@
 {% block content %}
 <h1>Library</h1>
 
+<p style="margin: 0 0 16px; color: var(--text-dim); font-size: 13px; max-width: 760px;">
+  Your movie library and transfer history: browse what's actually on disk by size below, see each
+  file's Radarr poster and the date it landed, and trigger a Redownload to replace an oversized
+  file with a smaller one at the same quality. The "Recent transfers" table at the bottom is a
+  history of finished transfers (success, failed, or skipped) -- for work still in progress, see
+  the Queue page.
+</p>
+
 <div class="card" style="margin-bottom: 16px; font-size: 13px;">
   {% if capacity_projection %}
     {% for c in capacity_projection %}
@@ -123,6 +131,27 @@
 {% endif %}
 
 <h1 style="font-size: 16px; margin-bottom: 12px;">Recent transfers</h1>
+<form method="get" action="/log" style="display: flex; gap: 8px; align-items: center; margin: 0 0 12px; flex-wrap: wrap; font-size: 12px;">
+  <select name="log_app_id" style="font-size: 12px;">
+    <option value="">All apps</option>
+    {% for a in apps %}
+    <option value="{{ a.id }}" {% if filter_log_app_id == a.id %}selected{% endif %}>{{ a.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="log_state" style="font-size: 12px;">
+    <option value="">All statuses</option>
+    {% for s in transfer_log_states %}
+    <option value="{{ s }}" {% if filter_log_state == s %}selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <label style="display: flex; align-items: center; gap: 4px; color: var(--text-dim); margin: 0;">
+    <input type="checkbox" name="log_error_only" {% if filter_log_error_only %}checked{% endif %}> only with an error
+  </label>
+  <button type="submit" style="margin-top: 0; font-size: 12px; padding: 6px 14px;">Filter</button>
+  {% if filter_log_app_id or filter_log_state or filter_log_error_only %}
+  <a href="/log" style="color: var(--text-dim); font-size: 12px;">clear filters</a>
+  {% endif %}
+</form>
 {% if entries %}
 <table>
   <tr><th>Time</th><th>App</th><th>File</th><th>Status</th><th>Size</th><th>Error</th></tr>
@@ -146,6 +175,6 @@
   {% endfor %}
 </table>
 {% else %}
-<div class="card empty-state">No completed transfers yet.</div>
+<div class="card empty-state">{% if filter_log_app_id or filter_log_state or filter_log_error_only %}No transfers match these filters.{% else %}No completed transfers yet.{% endif %}</div>
 {% endif %}
 {% endblock %}

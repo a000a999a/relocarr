@@ -3,11 +3,44 @@
 {% block content %}
 <h1>Queue</h1>
 
+<p style="margin: 0 0 16px; color: var(--text-dim); font-size: 13px; max-width: 760px;">
+  The live pipeline: one row per file currently being handed off from Radarr/Sonarr to its
+  destination, moving through <code>IMPORTED</code> &rarr; <code>COPYING</code> &rarr;
+  <code>VERIFIED</code> &rarr; <code>PUBLISHED</code> &rarr; <code>RECONCILED</code> &rarr;
+  <code>DONE</code>. A job that hits a permanent problem shows <code>NEEDS_ATTENTION</code> below,
+  with Retry/Skip/Abort &amp; Delete actions. The three buttons below are maintenance tools for
+  catching what the automatic pipeline can miss -- see the Jobs section of PLAN.md or the README
+  for what each one does.
+</p>
+
 <p style="margin: 0 0 20px; display: flex; gap: 10px; flex-wrap: wrap;">
   <a href="/jobs/cleanup-torrents" style="display: inline-block; padding: 8px 18px; border-radius: 3px; background: var(--btn-primary); color: white; text-decoration: none; font-size: 14px;">Find completed torrents still in Transmission</a>
   <a href="/jobs/cleanup-source" style="display: inline-block; padding: 8px 18px; border-radius: 3px; background: var(--btn-primary); color: white; text-decoration: none; font-size: 14px;">Find transferred movies on source</a>
   <a href="/jobs/reconcile-missing" style="display: inline-block; padding: 8px 18px; border-radius: 3px; background: var(--btn-primary); color: white; text-decoration: none; font-size: 14px;">Find untracked Radarr imports</a>
 </p>
+
+<form method="get" action="/jobs" style="display: flex; gap: 8px; align-items: center; margin: 0 0 16px; flex-wrap: wrap; font-size: 12px;">
+  <select name="app_id" style="font-size: 12px;">
+    <option value="">All apps</option>
+    {% for a in apps %}
+    <option value="{{ a.id }}" {% if filter_app_id == a.id %}selected{% endif %}>{{ a.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="state" style="font-size: 12px;">
+    <option value="">All states</option>
+    {% for s in job_states %}
+    <option value="{{ s }}" {% if filter_state == s %}selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <input type="text" name="target" value="{{ filter_target or '' }}" placeholder="filter by filename/path..." style="max-width: 240px; padding: 6px 8px; font-size: 12px;">
+  <label style="display: flex; align-items: center; gap: 4px; color: var(--text-dim); margin: 0;">
+    <input type="checkbox" name="error_only" {% if filter_error_only %}checked{% endif %}> only with an error
+  </label>
+  <button type="submit" style="margin-top: 0; font-size: 12px; padding: 6px 14px;">Filter</button>
+  {% if filter_app_id or filter_state or filter_target or filter_error_only %}
+  <a href="/jobs" style="color: var(--text-dim); font-size: 12px;">clear filters</a>
+  {% endif %}
+</form>
 
 {% if jobs %}
 <table>
@@ -48,6 +81,6 @@
   {% endfor %}
 </table>
 {% else %}
-<div class="card empty-state">No jobs yet.</div>
+<div class="card empty-state">{% if filter_app_id or filter_state or filter_target or filter_error_only %}No jobs match these filters.{% else %}No jobs yet.{% endif %}</div>
 {% endif %}
 {% endblock %}

@@ -43,6 +43,59 @@ def _insert_job(app_id: int, size_bytes: int, state: str = "DONE") -> int:
         ).lastrowid
 
 
+def _insert_log_job(app_id: int, target_path: str, state: str = "DONE", error: str | None = None) -> int:
+    media_file_id = f"f{next(_job_counter)}"
+    with session(app_settings.db_path) as conn:
+        return conn.execute(
+            """INSERT INTO jobs (app_id, download_id, media_file_id, unmonitor_id, source_path, target_path, size_bytes, state, error)
+               VALUES (?, NULL, ?, 1, '/s/a.mkv', ?, 1000, ?, ?)""",
+            (app_id, media_file_id, target_path, state, error),
+        ).lastrowid
+
+
+def test_log_filter_recent_transfers_by_state(client):
+    app_id = _insert_app("radarr", "/t")
+    _insert_log_job(app_id, "/t/done-one.mkv", state="DONE")
+    _insert_log_job(app_id, "/t/needs-one.mkv", state="NEEDS_ATTENTION")
+
+    resp = client.get("/log?log_state=DONE")
+    assert resp.status_code == 200
+    assert "done-one.mkv" in resp.text
+    assert "needs-one.mkv" not in resp.text
+
+
+def test_log_filter_recent_transfers_by_app(client):
+    app1_id = _insert_app("radarr", "/t1", base_url="http://log-app1")
+    app2_id = _insert_app("radarr", "/t2", base_url="http://log-app2")
+    _insert_log_job(app1_id, "/t/app1-file.mkv", state="DONE")
+    _insert_log_job(app2_id, "/t/app2-file.mkv", state="DONE")
+
+    resp = client.get(f"/log?log_app_id={app1_id}")
+    assert resp.status_code == 200
+    assert "app1-file.mkv" in resp.text
+    assert "app2-file.mkv" not in resp.text
+
+
+def test_log_filter_recent_transfers_error_only(client):
+    app_id = _insert_app("radarr", "/t")
+    _insert_log_job(app_id, "/t/clean.mkv", state="DONE", error=None)
+    _insert_log_job(app_id, "/t/broken.mkv", state="NEEDS_ATTENTION", error="boom")
+
+    resp = client.get("/log?log_error_only=true")
+    assert resp.status_code == 200
+    assert "broken.mkv" in resp.text
+    assert "clean.mkv" not in resp.text
+
+
+def test_log_filter_recent_transfers_empty_state_message(client):
+    app_id = _insert_app("radarr", "/t")
+    _insert_log_job(app_id, "/t/done.mkv", state="DONE")
+
+    resp = client.get("/log?log_state=SKIPPED")
+    assert resp.status_code == 200
+    assert "No transfers match these filters." in resp.text
+
+
 def test_log_empty_state(client):
     resp = client.get("/log")
     assert resp.status_code == 200
