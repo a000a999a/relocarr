@@ -711,7 +711,8 @@ practice:
   staging file is still on disk (Radarr's own `delete_file` API normally removes it during
   `RECONCILED`, but not reliably in every case). Still-seeding files are removed through
   Transmission (stopped first); everything else is deleted directly.
-- *Find untracked Radarr imports* — confirmed live, 2026-10-25: a missed webhook delivery (no
+- *Find & trigger missed transfers to target folder (i.e. your Plex library)* — confirmed live,
+  2026-10-25: a missed webhook delivery (no
   retry on Radarr's side) left movies Radarr had fully imported with **no relocarr job at all**,
   never copied to the target — 31 found on the first run. Scans Radarr's live movie list
   directly (not relocarr's own job history, which is exactly what's incomplete here) for a file

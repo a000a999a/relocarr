@@ -77,7 +77,8 @@ pipeline can miss:
 - **Find transferred movies on source** — same idea, but for the file itself rather than the
   torrent entry: any `DONE` job whose source file is still physically sitting in staging. Still
   seeding in Transmission → removed through Transmission; otherwise deleted straight off disk.
-- **Find untracked Radarr imports** — the whole pipeline starts from Radarr's "Download" webhook;
+- **Find & trigger missed transfers to target folder (i.e. your Plex library)** — the whole
+  pipeline starts from Radarr's "Download" webhook;
   if that webhook never arrives (confirmed live, 2026-10-25 — a missed delivery during a relocarr
   restart left real imports sitting in staging with no job at all, never copied anywhere) nothing
   else would ever notice. Scans Radarr's own movie list directly for a file with no matching job

@@ -1393,7 +1393,8 @@ def _reconcile_redirect_url(*, error: str | None = None, result: str | None = No
 
 @router.get("/jobs/reconcile-missing")
 def jobs_reconcile_missing(request: Request, error: str | None = None, result: str | None = None):
-    """Jobs page "Find untracked Radarr imports" button. Every file relocarr
+    """Jobs page "Find & trigger missed transfers to target folder (i.e. your
+    Plex library)" button. Every file relocarr
     has ever moved exists because a job was created for it -- almost always
     from Radarr's own "Download" webhook event, fired the instant Radarr
     finishes an import. If that webhook never arrives (confirmed live,
