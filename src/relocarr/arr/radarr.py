@@ -159,6 +159,16 @@ class RadarrApp:
         resp.raise_for_status()
         return [QualityProfile(id=p["id"], name=p["name"]) for p in resp.json()]
 
+    def list_movies(self) -> list[dict]:
+        """Raw GET /api/v3/movie, unindexed -- used by the Jobs page's
+        reconciliation scan (/jobs/reconcile-missing), which needs each
+        movie's raw movieFile id/path/size directly rather than the
+        already-indexed MovieMatch shape build_movie_index produces.
+        """
+        resp = self._client.get("/api/v3/movie")
+        resp.raise_for_status()
+        return resp.json()
+
     def build_movie_index(self) -> tuple[dict[str, MovieMatch], dict[tuple[str, int | None], MovieMatch]]:
         """One GET /api/v3/movie, indexed two ways, to resolve a filesystem
         file back to the right Radarr action without one call per file:

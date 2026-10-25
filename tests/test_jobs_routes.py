@@ -392,3 +392,216 @@ def test_cleanup_source_delete_with_nothing_checked_deletes_nothing(client):
     resp = client.post("/jobs/cleanup-source/delete", data={}, follow_redirects=False)
     assert resp.status_code == 303
     assert "error=" in resp.headers["location"]
+
+
+def _insert_radarr_app_with_paths(staging_root: str, target_root: str, base_url: str) -> int:
+    with session(app_settings.db_path) as conn:
+        return conn.execute(
+            """INSERT INTO apps (kind, name, base_url, api_key, webhook_token, staging_root, target_root)
+               VALUES ('radarr', 'Radarr', ?, 'key', 'token', ?, ?)""",
+            (base_url, staging_root, target_root),
+        ).lastrowid
+
+
+@respx.mock
+def test_reconcile_lists_an_untracked_radarr_import(client, tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    movie_file = staging / "Movie.mkv"
+    movie_file.write_bytes(b"x" * 2000)
+
+    _insert_radarr_app_with_paths(str(staging), str(target), base_url="http://radarr-recon1")
+    respx.get("http://radarr-recon1/api/v3/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 10,
+                    "title": "Movie",
+                    "year": 2020,
+                    "movieFile": {"id": 55, "path": str(movie_file), "size": 2000},
+                }
+            ],
+        )
+    )
+
+    resp = client.get("/jobs/reconcile-missing")
+    assert resp.status_code == 200
+    assert "Movie.mkv" in resp.text
+
+
+@respx.mock
+def test_reconcile_excludes_a_movie_with_no_file(client, tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+
+    _insert_radarr_app_with_paths(str(staging), str(target), base_url="http://radarr-recon-nofile")
+    respx.get("http://radarr-recon-nofile/api/v3/movie").mock(
+        return_value=httpx.Response(200, json=[{"id": 10, "title": "Movie", "year": 2020}])
+    )
+
+    resp = client.get("/jobs/reconcile-missing")
+    assert resp.status_code == 200
+    assert "Nothing untracked right now" in resp.text
+
+
+@respx.mock
+def test_reconcile_excludes_a_file_already_tracked_by_a_job(client, tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    movie_file = staging / "Movie.mkv"
+    movie_file.write_bytes(b"x" * 2000)
+
+    app_id = _insert_radarr_app_with_paths(str(staging), str(target), base_url="http://radarr-recon2")
+    with session(app_settings.db_path) as conn:
+        conn.execute(
+            """INSERT INTO jobs (app_id, download_id, media_file_id, unmonitor_id, source_path, target_path, size_bytes, state)
+               VALUES (?, NULL, '55', 10, ?, ?, 2000, 'DONE')""",
+            (app_id, str(movie_file), str(target / "Movie.mkv")),
+        )
+    respx.get("http://radarr-recon2/api/v3/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 10,
+                    "title": "Movie",
+                    "year": 2020,
+                    "movieFile": {"id": 55, "path": str(movie_file), "size": 2000},
+                }
+            ],
+        )
+    )
+
+    resp = client.get("/jobs/reconcile-missing")
+    assert resp.status_code == 200
+    assert "Nothing untracked right now" in resp.text
+
+
+@respx.mock
+def test_reconcile_create_creates_an_imported_job(client, tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    movie_file = staging / "Movie.mkv"
+    movie_file.write_bytes(b"x" * 2000)
+
+    app_id = _insert_radarr_app_with_paths(str(staging), str(target), base_url="http://radarr-recon3")
+    respx.get("http://radarr-recon3/api/v3/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 10,
+                    "title": "Movie",
+                    "year": 2020,
+                    "movieFile": {"id": 55, "path": str(movie_file), "size": 2000},
+                }
+            ],
+        )
+    )
+
+    resp = client.post(
+        "/jobs/reconcile-missing/create", data={"candidates": [f"{app_id}|10|55"]}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+
+    with session(app_settings.db_path) as conn:
+        job = conn.execute(
+            "SELECT * FROM jobs WHERE app_id = ? AND media_file_id = '55'", (app_id,)
+        ).fetchone()
+    assert job is not None
+    assert job["state"] == "IMPORTED"
+    assert job["download_id"] is None
+    assert job["source_path"] == str(movie_file)
+    assert job["target_path"] == str(target / "Movie.mkv")
+
+
+@respx.mock
+def test_reconcile_create_respects_max_file_size(client, tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    movie_file = staging / "Movie.mkv"
+    movie_file.write_bytes(b"x" * 2000)
+
+    with session(app_settings.db_path) as conn:
+        app_id = conn.execute(
+            """INSERT INTO apps (kind, name, base_url, api_key, webhook_token, staging_root, target_root, max_file_size_bytes)
+               VALUES ('radarr', 'Radarr', 'http://radarr-recon4', 'key', 'token', ?, ?, 1000)""",
+            (str(staging), str(target)),
+        ).lastrowid
+    respx.get("http://radarr-recon4/api/v3/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 10,
+                    "title": "Movie",
+                    "year": 2020,
+                    "movieFile": {"id": 55, "path": str(movie_file), "size": 2000},
+                }
+            ],
+        )
+    )
+
+    client.post(
+        "/jobs/reconcile-missing/create", data={"candidates": [f"{app_id}|10|55"]}, follow_redirects=False
+    )
+
+    with session(app_settings.db_path) as conn:
+        job = conn.execute(
+            "SELECT * FROM jobs WHERE app_id = ? AND media_file_id = '55'", (app_id,)
+        ).fetchone()
+    assert job["state"] == "NEEDS_ATTENTION"
+
+
+@respx.mock
+def test_reconcile_create_skips_a_file_that_changed_since_listing(client, tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    movie_file = staging / "Movie.mkv"
+    movie_file.write_bytes(b"x" * 2000)
+
+    app_id = _insert_radarr_app_with_paths(str(staging), str(target), base_url="http://radarr-recon5")
+    # Radarr now reports a different (newer) file id than what was checked.
+    respx.get("http://radarr-recon5/api/v3/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 10,
+                    "title": "Movie",
+                    "year": 2020,
+                    "movieFile": {"id": 99, "path": str(movie_file), "size": 2000},
+                }
+            ],
+        )
+    )
+
+    resp = client.post(
+        "/jobs/reconcile-missing/create", data={"candidates": [f"{app_id}|10|55"]}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+
+    with session(app_settings.db_path) as conn:
+        job = conn.execute(
+            "SELECT * FROM jobs WHERE app_id = ? AND media_file_id = '55'", (app_id,)
+        ).fetchone()
+    assert job is None  # stale candidate -- correctly skipped, not created
+
+
+def test_reconcile_create_with_nothing_checked_creates_nothing(client):
+    resp = client.post("/jobs/reconcile-missing/create", data={}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert "error=" in resp.headers["location"]

@@ -1315,6 +1315,198 @@ def jobs_cleanup_source_delete(job_ids: list[str] = Form(default=[])):
     return RedirectResponse(_source_redirect_url(result=result), status_code=303)
 
 
+def _reconcile_redirect_url(*, error: str | None = None, result: str | None = None) -> str:
+    params = []
+    if error:
+        params.append(f"error={quote(error)}")
+    if result:
+        params.append(f"result={quote(result)}")
+    return "/jobs/reconcile-missing" + ("?" + "&".join(params) if params else "")
+
+
+@router.get("/jobs/reconcile-missing")
+def jobs_reconcile_missing(request: Request, error: str | None = None, result: str | None = None):
+    """Jobs page "Find untracked Radarr imports" button. Every file relocarr
+    has ever moved exists because a job was created for it -- almost always
+    from Radarr's own "Download" webhook event, fired the instant Radarr
+    finishes an import. If that webhook never arrives (confirmed live,
+    2026-10-25: Radarr's own history showed a clean, successful import for
+    two movies relocarr had zero job for, and neither file had ever been
+    copied to the target -- the whole pipeline simply never started for
+    them) nothing else would ever notice; there's no background scan that
+    would catch a missing job on its own.
+
+    This scans every configured Radarr app's CURRENT movie list directly
+    (not relocarr's own job history, which is exactly what's incomplete
+    here) for a movieFile that's both still on disk and not already
+    covered by a job -- matched by media_file_id, the *arr's own moviefile
+    id, the same identifier the webhook handler keys jobs on. Creating a
+    job for one here is otherwise identical to what the webhook would have
+    done: same target path computation, same oversized-file guard. The one
+    difference is download_id is always left NULL, the same as any other
+    manually-imported file (PLAN.md Section 5) -- there's no reliable way
+    to recover which torrent originally produced a file from Radarr's
+    movie API alone, so these skip the removal gate's torrent cleanup
+    entirely and rely on /jobs/cleanup-torrents or /jobs/cleanup-source as
+    the fallback if a torrent is still sitting around for one of them.
+    """
+    with session(settings.db_path) as conn:
+        apps = conn.execute("SELECT * FROM apps WHERE kind = 'radarr'").fetchall()
+
+    candidates = []
+    for app in apps:
+        if not app["staging_root"] or not app["target_root"]:
+            continue
+        client = arr.RadarrApp(app["base_url"], app["api_key"])
+        try:
+            movies = client.list_movies()
+        except httpx.HTTPError:
+            logger.exception("could not reach Radarr app %r for reconciliation", app["name"])
+            continue
+        finally:
+            client.close()
+
+        with session(settings.db_path) as conn:
+            tracked_file_ids = {
+                row["media_file_id"]
+                for row in conn.execute(
+                    "SELECT media_file_id FROM jobs WHERE app_id = ?", (app["id"],)
+                ).fetchall()
+            }
+
+        for m in movies:
+            movie_file = m.get("movieFile")
+            if not movie_file:
+                continue
+            file_id = str(movie_file["id"])
+            if file_id in tracked_file_ids:
+                continue
+            try:
+                compute_target_path(
+                    source_path=movie_file["path"],
+                    staging_root=app["staging_root"],
+                    target_root=app["target_root"],
+                    mode=app["layout_mode"],
+                )
+            except (ValueError, OSError):
+                continue  # not actually under this app's staging root, or staging root unreachable
+            if not Path(movie_file["path"]).is_file():
+                continue  # Radarr's record is stale -- nothing there to copy
+            candidates.append(
+                {
+                    "app_id": app["id"],
+                    "app_name": app["name"],
+                    "movie_id": m["id"],
+                    "file_id": file_id,
+                    "name": Path(movie_file["path"]).name,
+                    "size_bytes": movie_file["size"],
+                }
+            )
+
+    return templates.TemplateResponse(
+        request,
+        "jobs_reconcile.html",
+        {"candidates": candidates, "error": error, "result": result},
+    )
+
+
+@router.post("/jobs/reconcile-missing/create")
+def jobs_reconcile_missing_create(candidates: list[str] = Form(default=[])):
+    """Each `candidates` value is "<app_id>|<movie_id>|<file_id>". Re-fetches
+    every movie fresh from Radarr rather than trusting anything from the GET
+    page -- the file could have changed (a redownload finished, a manual
+    delete) in the time between viewing the list and submitting it, so the
+    file_id is re-checked against what Radarr reports right now before a
+    job is created.
+    """
+    if not candidates:
+        return RedirectResponse(
+            _reconcile_redirect_url(error="Nothing was checked -- nothing created."), status_code=303
+        )
+
+    with session(settings.db_path) as conn:
+        apps_by_id = {a["id"]: a for a in conn.execute("SELECT * FROM apps").fetchall()}
+
+    by_app: dict[int, set[str]] = {}
+    for raw in candidates:
+        app_id_str, _, rest = raw.partition("|")
+        try:
+            by_app.setdefault(int(app_id_str), set()).add(rest)
+        except ValueError:
+            continue
+
+    created = 0
+    skipped = 0
+    for app_id, keys in by_app.items():
+        app = apps_by_id.get(app_id)
+        if app is None:
+            skipped += len(keys)
+            continue
+        client = arr.RadarrApp(app["base_url"], app["api_key"])
+        try:
+            movies_by_id = {m["id"]: m for m in client.list_movies()}
+        except httpx.HTTPError:
+            logger.exception("could not reach Radarr app %r to create reconciled jobs", app_id)
+            skipped += len(keys)
+            continue
+        finally:
+            client.close()
+
+        for key in keys:
+            movie_id_str, _, file_id = key.partition("|")
+            try:
+                movie_id = int(movie_id_str)
+            except ValueError:
+                skipped += 1
+                continue
+            movie = movies_by_id.get(movie_id)
+            movie_file = movie.get("movieFile") if movie else None
+            if movie_file is None or str(movie_file["id"]) != file_id:
+                skipped += 1  # file changed or vanished since the list was shown
+                continue
+            try:
+                target_path = compute_target_path(
+                    source_path=movie_file["path"],
+                    staging_root=app["staging_root"],
+                    target_root=app["target_root"],
+                    mode=app["layout_mode"],
+                )
+            except (ValueError, OSError):
+                skipped += 1
+                continue
+
+            max_size = app["max_file_size_bytes"]
+            if max_size and movie_file["size"] > max_size:
+                initial_state = "NEEDS_ATTENTION"
+                error = f"file size {movie_file['size']} exceeds configured max {max_size}"
+            else:
+                initial_state = "IMPORTED"
+                error = None
+
+            with session(settings.db_path) as conn:
+                cursor = conn.execute(
+                    """INSERT OR IGNORE INTO jobs
+                       (app_id, download_id, media_file_id, unmonitor_id, source_path, target_path, size_bytes, state, error)
+                       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        app_id,
+                        file_id,
+                        movie_id,
+                        movie_file["path"],
+                        str(target_path),
+                        movie_file["size"],
+                        initial_state,
+                        error,
+                    ),
+                )
+            created += cursor.rowcount
+
+    result = f"Created {created} job{'s' if created != 1 else ''} -- the normal pipeline will pick them up within one poll interval."
+    if skipped:
+        result += f" {skipped} skipped (already handled, or no longer valid)."
+    return RedirectResponse(_reconcile_redirect_url(result=result), status_code=303)
+
+
 # ----------------------------------------------------------------------
 # Setup Guide -- static reference content, PLAN.md Section 10's checklist
 # rendered in the UI. Most of the Radarr/Sonarr rows are also checked live

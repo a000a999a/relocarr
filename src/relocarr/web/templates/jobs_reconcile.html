@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block nav_jobs %}active{% endblock %}
+{% block content %}
+<h1>Radarr imports relocarr never tracked</h1>
+
+<p style="margin: 0 0 16px; color: var(--text-dim); font-size: 13px;">
+  Every row below is a file Radarr has already fully imported, sitting in staging right now, with
+  no relocarr job for it at all -- almost always because Radarr's import webhook never reached
+  relocarr. Nothing else would ever notice or copy these to the target on its own. Creating a job
+  here is exactly what would have happened had the webhook arrived: the normal pipeline picks it up
+  on its own within one poll interval and copies it to the target like any other import.
+</p>
+
+{% if error %}
+<div class="card" style="margin-bottom: 16px; border-color: var(--btn-danger);">
+  <p style="margin: 0; color: var(--btn-danger); font-size: 13px;">{{ error }}</p>
+</div>
+{% endif %}
+{% if result %}
+<div class="card" style="margin-bottom: 16px;">
+  <p style="margin: 0; color: #81c995; font-size: 13px;">{{ result }}</p>
+</div>
+{% endif %}
+
+{% if candidates %}
+<form id="reconcile-form" method="post" action="/jobs/reconcile-missing/create" style="margin: 0 0 8px;">
+  <button type="submit" style="font-size: 13px;">Create jobs for checked files</button>
+  <span style="color: var(--text-dim); font-size: 11px; margin-left: 8px;">check the rows below you want, then submit -- nothing is created if nothing's checked</span>
+</form>
+<table>
+  <tr><th></th><th>App</th><th>File</th><th>Size</th></tr>
+  {% for c in candidates %}
+  <tr>
+    <td><input type="checkbox" name="candidates" value="{{ c.app_id }}|{{ c.movie_id }}|{{ c.file_id }}" form="reconcile-form"></td>
+    <td>{{ c.app_name }}</td>
+    <td style="font-size: 12px;">{{ c.name }}</td>
+    <td>{{ (c.size_bytes / (1024**3)) | round(2) }} GB</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="card empty-state">Nothing untracked right now -- every Radarr import has a job.</div>
+{% endif %}
+{% endblock %}
