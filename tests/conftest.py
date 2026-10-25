@@ -2,6 +2,7 @@ import pytest
 
 from relocarr.disk_health import cache as disk_space_cache
 from relocarr.library import cache as movie_library_cache
+from relocarr.version_check import cache as version_check_cache
 
 
 @pytest.fixture(autouse=True)
@@ -37,3 +38,17 @@ def _reset_disk_space_cache():
     disk_space_cache.entries = {}
     disk_space_cache.checked_at = None
     disk_space_cache.last_timeout_at = None
+
+
+@pytest.fixture(autouse=True)
+def _reset_version_check_cache():
+    """Same reasoning as the other two caches above: relocarr.version_check.cache
+    is a module-level singleton the System page reads on every render.
+    """
+    version_check_cache.latest_version = None
+    version_check_cache.checked_at = None
+    version_check_cache.error = None
+    yield
+    version_check_cache.latest_version = None
+    version_check_cache.checked_at = None
+    version_check_cache.error = None

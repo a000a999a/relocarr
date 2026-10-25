@@ -23,6 +23,8 @@ from ..db import session
 from ..disk_health import cache as disk_space_cache
 from ..library import cache as movie_library_cache
 from ..library import parse_title_year
+from ..version_check import cache as version_check_cache
+from ..version_check import is_newer
 from ..transfer.layout import compute_target_path
 from ..transfer.safety import PathSafetyError, assert_distinct_roots
 
@@ -1667,6 +1669,17 @@ def system_status(request: Request):
             "disk_checked_at": (
                 datetime.fromtimestamp(disk_space_cache.checked_at).strftime("%Y-%m-%d %H:%M:%S")
                 if disk_space_cache.checked_at
+                else None
+            ),
+            "latest_version": version_check_cache.latest_version,
+            "update_available": (
+                is_newer(version_check_cache.latest_version, VERSION)
+                if version_check_cache.latest_version
+                else False
+            ),
+            "version_checked_at": (
+                datetime.fromtimestamp(version_check_cache.checked_at).strftime("%Y-%m-%d %H:%M:%S")
+                if version_check_cache.checked_at
                 else None
             ),
         },

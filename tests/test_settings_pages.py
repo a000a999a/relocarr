@@ -7,6 +7,7 @@ from relocarr.config import settings as app_settings
 from relocarr.db import init_db, session
 from relocarr.disk_health import cache as disk_space_cache
 from relocarr.library import cache as movie_library_cache
+from relocarr.version_check import cache as version_check_cache
 
 
 @pytest.fixture
@@ -106,6 +107,32 @@ def test_system_page_renders_with_no_apps(client):
     assert resp.status_code == 200
     assert "No apps configured yet." in resp.text
     assert "1.0.0" in resp.text  # version
+
+
+def test_system_page_shows_not_checked_yet_before_the_background_loop_has_run(client):
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "not checked yet" in resp.text
+
+
+def test_system_page_shows_up_to_date_when_current_version_is_latest(client):
+    version_check_cache.latest_version = "v1.0.0"
+    version_check_cache.checked_at = 123.0
+
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "up to date" in resp.text
+    assert "available" not in resp.text
+
+
+def test_system_page_shows_an_update_link_when_a_newer_version_exists(client):
+    version_check_cache.latest_version = "v1.1.0"
+    version_check_cache.checked_at = 123.0
+
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "v1.1.0 available" in resp.text
+    assert 'href="https://github.com/a000a999a/relocarr/tree/v1.1.0"' in resp.text
 
 
 def test_system_page_shows_disk_space_for_configured_paths(client, tmp_path):

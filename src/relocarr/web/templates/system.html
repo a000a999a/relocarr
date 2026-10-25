@@ -78,7 +78,19 @@
 
 <h1 style="font-size: 16px; margin: 24px 0 8px;">About</h1>
 <table>
-  <tr><td style="color: var(--text-dim); width: 180px;">Version</td><td>{{ version }}</td></tr>
+  <tr>
+    <td style="color: var(--text-dim); width: 180px;">Version</td>
+    <td>
+      {{ version }}
+      {% if update_available %}
+        <a href="https://github.com/a000a999a/relocarr/tree/{{ latest_version }}" style="color: var(--accent); margin-left: 8px;">&#8593; {{ latest_version }} available</a>
+      {% elif version_checked_at %}
+        <span style="color: var(--text-dim); font-size: 12px; margin-left: 8px;">up to date</span>
+      {% else %}
+        <span style="color: var(--text-dim); font-size: 12px; margin-left: 8px;">not checked yet</span>
+      {% endif %}
+    </td>
+  </tr>
   <tr><td style="color: var(--text-dim);">Database</td><td>Sqlite -- {{ db_path }}</td></tr>
   <tr><td style="color: var(--text-dim);">Docker</td><td>{{ "Yes" if in_docker else "No" }}</td></tr>
   <tr><td style="color: var(--text-dim);">Uptime</td><td>{{ uptime_seconds // 3600 }}h {{ (uptime_seconds % 3600) // 60 }}m</td></tr>
