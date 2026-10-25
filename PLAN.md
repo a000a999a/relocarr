@@ -676,6 +676,10 @@ downloads so hardlinks work), destination on the network share.
   are also configured (added 2026-10-25, not investigated yet).
 * Check where the "smaller than current file" redownload threshold is configured/stored --
   user recalls it may be <10% (added 2026-10-25, not investigated yet).
+* Revisit "Find completed torrents still in Transmission" -- user's original intent: analyze
+  whether the movie file was actually transferred to target, then clean up orphan torrent
+  records in Transmission. Needs a fresh look at what the current logic actually checks vs.
+  that intent (added 2026-10-25, not investigated yet).
 
 ## 19. Post-v0.1 feature additions (2026-10-24/25)
 
