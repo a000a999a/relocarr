@@ -7,8 +7,8 @@ Radarr / Sonarr perform the renaming.
 Relocarr End to End
 1: controlls the transfer to NAS (i.e. Plex) - for movies flat folder structure and series following the series, episode folder structure
 2: Cleans up finished downloads from Transmission (deletes finished torrent entries)
-2: it can re-downloads a smaller version if you like to improve space on your disk
-3: it can delete duplicates from your NAS
+3: it can re-downloads a smaller version if you like to improve space on your disk
+4: it can delete duplicates from your NAS
 
 See [PLAN.md](PLAN.md) for the full design and the rationale behind it.
 
