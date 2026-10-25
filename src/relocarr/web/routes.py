@@ -491,6 +491,15 @@ def settings_plex_submit(
     plex_base_url: str = Form(""),
     plex_token: str = Form(""),
 ):
+    # Confirmed live, 2026-10-25: Plex's own "find your token" instructions
+    # have a user copy the token out of a URL's query string, and it's an
+    # easy slip to paste the whole "X-Plex-Token=<value>" fragment instead
+    # of just <value> -- strip it off if present rather than silently
+    # saving a token that will fail every real request.
+    plex_token = plex_token.strip()
+    if plex_token.lower().startswith("x-plex-token="):
+        plex_token = plex_token.split("=", 1)[1].strip()
+
     connection_result = None
     connection_error = None
     if plex_base_url and plex_token:

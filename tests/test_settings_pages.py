@@ -298,7 +298,7 @@ def test_plex_settings_page_renders_with_defaults(client):
 
 @respx.mock
 def test_plex_settings_save_tests_the_connection_and_saves_on_success(client):
-    respx.get("http://plex:32400/identity").mock(
+    respx.get("http://plex:32400/library/sections").mock(
         return_value=httpx.Response(200, json={"MediaContainer": {"version": "1.40.0"}})
     )
 
@@ -321,8 +321,30 @@ def test_plex_settings_save_tests_the_connection_and_saves_on_success(client):
 
 
 @respx.mock
+def test_plex_settings_save_strips_a_pasted_x_plex_token_prefix(client):
+    # Confirmed live, 2026-10-25: a real user pasted the whole
+    # "X-Plex-Token=<value>" query-string fragment instead of just the
+    # value, and the old /identity-based check didn't catch it.
+    route = respx.get("http://plex:32400/library/sections").mock(
+        return_value=httpx.Response(200, json={"MediaContainer": {"version": "1.40.0"}})
+    )
+
+    resp = client.post(
+        "/settings/plex",
+        data={"plex_base_url": "http://plex:32400", "plex_token": "X-Plex-Token=realtoken123"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert route.calls.last.request.headers["X-Plex-Token"] == "realtoken123"
+
+    with session(app_settings.db_path) as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'plex_token'").fetchone()
+    assert row["value"] == "realtoken123"
+
+
+@respx.mock
 def test_plex_settings_save_does_not_persist_on_a_failed_connection(client):
-    respx.get("http://plex:32400/identity").mock(return_value=httpx.Response(401))
+    respx.get("http://plex:32400/library/sections").mock(return_value=httpx.Response(401))
 
     resp = client.post(
         "/settings/plex", data={"plex_base_url": "http://plex:32400", "plex_token": "bad"}

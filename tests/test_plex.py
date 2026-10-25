@@ -12,7 +12,7 @@ from relocarr.plex import PlexClient, PlexQualityCache, run_plex_quality_check_f
 @respx.mock
 def test_test_connection_ok():
     client = PlexClient("http://plex:32400", "tok")
-    respx.get("http://plex:32400/identity").mock(
+    respx.get("http://plex:32400/library/sections").mock(
         return_value=httpx.Response(200, json={"MediaContainer": {"version": "1.40.0"}})
     )
 
@@ -26,7 +26,7 @@ def test_test_connection_ok():
 @respx.mock
 def test_test_connection_failure():
     client = PlexClient("http://plex:32400", "tok")
-    respx.get("http://plex:32400/identity").mock(return_value=httpx.Response(401))
+    respx.get("http://plex:32400/library/sections").mock(return_value=httpx.Response(401))
 
     result = client.test_connection()
     client.close()

@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block nav_settings %}active{% endblock %}
-{% block nav_settings_plex %}active{% endblock %}
 {% block content %}
 <h1>Plex</h1>
 <p style="color: var(--text-dim); font-size: 13px; max-width: 640px; margin-top: -10px;">
@@ -26,4 +25,23 @@
 
   <button type="submit">Test &amp; Save</button>
 </form>
+
+<div class="card" style="margin-top: 24px; max-width: 640px; font-size: 13px;">
+  <h1 style="font-size: 14px; margin: 0 0 10px;">Finding your X-Plex-Token</h1>
+  <ol style="color: var(--text-dim); padding-left: 20px; margin: 0;">
+    <li style="margin-bottom: 6px;">Sign in to your Plex account in the Plex web app.</li>
+    <li style="margin-bottom: 6px;">Browse to any library item and choose "View XML" for it.</li>
+    <li style="margin-bottom: 6px;">
+      Look at the resulting URL's address bar: it ends in
+      <code>...&amp;X-Plex-Token=&lt;value&gt;</code>. Copy only the
+      <code>&lt;value&gt;</code> part after the <code>=</code> into the field above --
+      <strong>not</strong> the <code>X-Plex-Token=</code> part itself (a common copy-paste slip;
+      relocarr now strips it automatically if pasted that way, but the token itself still needs
+      to be the real one).
+    </li>
+  </ol>
+  <p style="margin: 12px 0 0;">
+    Full walkthrough: <a href="https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/" style="color: var(--accent);">Plex Support -- Finding an authentication token / X-Plex-Token</a>.
+  </p>
+</div>
 {% endblock %}

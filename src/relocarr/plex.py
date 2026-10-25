@@ -40,8 +40,17 @@ class PlexClient:
         )
 
     def test_connection(self) -> ConnectionTestResult:
+        """Deliberately NOT /identity -- confirmed live, 2026-10-25: Plex
+        answers that one without checking the token at all, so a bad or
+        malformed token (a common copy-paste mistake: pasting the whole
+        "X-Plex-Token=..." query-string fragment instead of just the
+        value after the =) still reported a successful "Connected" status
+        here while the real quality lookup's own /library/sections call
+        failed with 401. /library/sections genuinely requires a valid
+        token, so a bad one is now caught right here, at save time.
+        """
         try:
-            resp = self._client.get("/identity")
+            resp = self._client.get("/library/sections")
             resp.raise_for_status()
             version = resp.json().get("MediaContainer", {}).get("version")
             return ConnectionTestResult(ok=True, version=version)
