@@ -28,7 +28,7 @@
   <span style="color: var(--text-dim); font-size: 11px; margin-left: 8px;">check the rows below you want, then submit -- nothing is created if nothing's checked</span>
 </form>
 <table>
-  <tr><th></th><th>App</th><th>File</th><th>Size</th></tr>
+  <tr><th><input type="checkbox" class="select-all" title="select all"></th><th>App</th><th>File</th><th>Size</th></tr>
   {% for c in candidates %}
   <tr>
     <td><input type="checkbox" name="candidates" value="{{ c.app_id }}|{{ c.movie_id }}|{{ c.file_id }}" form="reconcile-form"></td>

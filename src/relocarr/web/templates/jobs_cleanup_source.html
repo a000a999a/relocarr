@@ -28,7 +28,7 @@
   <span style="color: var(--text-dim); font-size: 11px; margin-left: 8px;">check the rows below you want, then submit -- nothing is deleted if nothing's checked</span>
 </form>
 <table>
-  <tr><th></th><th>App</th><th>File</th><th>Size</th><th></th></tr>
+  <tr><th><input type="checkbox" class="select-all" title="select all"></th><th>App</th><th>File</th><th>Size</th><th></th></tr>
   {% for c in candidates %}
   <tr>
     <td><input type="checkbox" name="job_ids" value="{{ c.job_id }}" form="cleanup-source-form"></td>

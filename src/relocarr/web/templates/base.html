@@ -174,6 +174,21 @@
         });
       });
     })();
+
+    // A checkbox marked class="select-all" toggles every other checkbox in
+    // the same table -- works regardless of sort order above, since it
+    // re-queries the table's checkboxes live rather than caching a row list.
+    (function () {
+      document.querySelectorAll("input.select-all").forEach(function (master) {
+        var table = master.closest("table");
+        if (!table) return;
+        master.addEventListener("change", function () {
+          table.querySelectorAll('input[type="checkbox"]').forEach(function (cb) {
+            if (cb !== master) cb.checked = master.checked;
+          });
+        });
+      });
+    })();
   </script>
 </body>
 </html>
