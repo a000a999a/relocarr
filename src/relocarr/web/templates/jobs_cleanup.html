@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block nav_jobs %}active{% endblock %}
+{% block content %}
+<h1>Completed torrents still in Transmission</h1>
+
+<p style="margin: 0 0 16px; color: var(--text-dim); font-size: 13px;">
+  Every row below already finished relocarr's whole pipeline -- copied, verified, and published to
+  its target folder -- so the matching torrent sitting in Transmission is a pure leftover seed, not
+  something still in progress. Deleting one here removes it from Transmission <strong>and</strong>
+  deletes its downloaded data on disk. Nothing still mid-transfer or still awaited by Radarr/Sonarr
+  is ever shown here.
+</p>
+
+{% if error %}
+<div class="card" style="margin-bottom: 16px; border-color: var(--btn-danger);">
+  <p style="margin: 0; color: var(--btn-danger); font-size: 13px;">{{ error }}</p>
+</div>
+{% endif %}
+{% if result %}
+<div class="card" style="margin-bottom: 16px;">
+  <p style="margin: 0; color: #81c995; font-size: 13px;">{{ result }}</p>
+</div>
+{% endif %}
+
+{% if candidates %}
+<form id="cleanup-form" method="post" action="/jobs/cleanup-torrents/delete" style="margin: 0 0 8px;">
+  <button type="submit" style="font-size: 13px; background: var(--btn-danger);">Delete checked torrents &amp; their data</button>
+  <span style="color: var(--text-dim); font-size: 11px; margin-left: 8px;">check the rows below you want, then submit -- nothing is deleted if nothing's checked</span>
+</form>
+<table>
+  <tr><th></th><th>App</th><th>Torrent</th><th>Size</th></tr>
+  {% for c in candidates %}
+  <tr>
+    <td><input type="checkbox" name="torrents" value="{{ c.app_id }}|{{ c.torrent_id }}" form="cleanup-form"></td>
+    <td>{{ c.app_name }}</td>
+    <td style="font-size: 12px;">{{ c.name }}</td>
+    <td>{{ (c.size_bytes / (1024**3)) | round(2) }} GB</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="card empty-state">No leftover torrents found -- nothing to clean up right now.</div>
+{% endif %}
+{% endblock %}

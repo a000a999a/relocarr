@@ -1,4 +1,6 @@
+import httpx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 
 from relocarr.config import settings as app_settings
@@ -158,3 +160,104 @@ def test_abort_never_deletes_a_file_another_completed_job_owns(client, tmp_path)
         done = conn.execute("SELECT * FROM jobs WHERE id = ?", (done_job_id,)).fetchone()
     assert stuck is None  # the stuck job row is still removed
     assert done is not None  # the other job's own row is untouched
+
+
+def _insert_app_with_client(download_id: str = "ABCDEF123") -> tuple[int, int]:
+    """A radarr app with a Transmission download client and one DONE job
+    carrying `download_id` -- the minimum needed for a cleanup-torrents
+    candidate to exist.
+    """
+    with session(app_settings.db_path) as conn:
+        app_id = conn.execute(
+            """INSERT INTO apps (kind, name, base_url, api_key, webhook_token, staging_root, target_root)
+               VALUES ('radarr', 'Radarr', 'http://x', 'key', 'token', '/s', '/t')"""
+        ).lastrowid
+        conn.execute(
+            """INSERT INTO download_clients (app_id, kind, host, port)
+               VALUES (?, 'transmission', 'tx-host', 9091)""",
+            (app_id,),
+        )
+        job_id = conn.execute(
+            """INSERT INTO jobs (app_id, download_id, media_file_id, unmonitor_id, source_path, target_path, size_bytes, state)
+               VALUES (?, ?, 'f1', 1, '/s/a.mkv', '/t/a.mkv', 2000, 'DONE')""",
+            (app_id, download_id),
+        ).lastrowid
+        return app_id, job_id
+
+
+def _torrent_get_response(torrents: list[dict]) -> httpx.Response:
+    return httpx.Response(200, json={"result": "success", "arguments": {"torrents": torrents}})
+
+
+@respx.mock
+def test_cleanup_torrents_lists_a_torrent_backed_by_a_done_job(client):
+    _insert_app_with_client(download_id="ABCDEF123")
+    respx.post("http://tx-host:9091/transmission/rpc/").mock(
+        return_value=_torrent_get_response(
+            [
+                {
+                    "id": 5,
+                    "name": "Example Movie",
+                    # Transmission's hashString comes back lowercase, the
+                    # *arr's downloadId is uppercase -- compared
+                    # case-insensitively, same as watcher.py.
+                    "hashString": "abcdef123",
+                    "percentDone": 1.0,
+                    "status": 0,
+                    "downloadDir": "/downloads",
+                }
+            ]
+        )
+    )
+
+    resp = client.get("/jobs/cleanup-torrents")
+    assert resp.status_code == 200
+    assert "Example Movie" in resp.text
+
+
+@respx.mock
+def test_cleanup_torrents_ignores_a_torrent_with_no_done_job(client):
+    _insert_app_with_client(download_id="ABCDEF123")
+    respx.post("http://tx-host:9091/transmission/rpc/").mock(
+        return_value=_torrent_get_response(
+            [
+                {
+                    "id": 9,
+                    "name": "Unrelated Torrent",
+                    "hashString": "zzzzzzzzz",  # does not match the DONE job's download_id
+                    "percentDone": 1.0,
+                    "status": 0,
+                    "downloadDir": "/downloads",
+                }
+            ]
+        )
+    )
+
+    resp = client.get("/jobs/cleanup-torrents")
+    assert resp.status_code == 200
+    assert "Unrelated Torrent" not in resp.text
+    assert "No leftover torrents found" in resp.text
+
+
+@respx.mock
+def test_cleanup_torrents_delete_removes_checked_torrents(client):
+    app_id, _ = _insert_app_with_client()
+    remove_route = respx.post("http://tx-host:9091/transmission/rpc/").mock(
+        return_value=httpx.Response(200, json={"result": "success", "arguments": {}})
+    )
+
+    resp = client.post(
+        "/jobs/cleanup-torrents/delete", data={"torrents": [f"{app_id}|5"]}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert remove_route.called
+    import json
+
+    body = json.loads(remove_route.calls[0].request.content)
+    assert body == {"method": "torrent-remove", "arguments": {"ids": [5], "delete-local-data": True}}
+
+
+def test_cleanup_torrents_delete_with_nothing_checked_deletes_nothing(client):
+    resp = client.post("/jobs/cleanup-torrents/delete", data={}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert "error=" in resp.headers["location"]

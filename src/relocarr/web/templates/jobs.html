@@ -3,6 +3,10 @@
 {% block content %}
 <h1>Jobs</h1>
 
+<p style="margin: 0 0 20px;">
+  <a href="/jobs/cleanup-torrents" style="display: inline-block; padding: 8px 18px; border-radius: 3px; background: var(--btn-primary); color: white; text-decoration: none; font-size: 14px;">Find completed torrents still in Transmission</a>
+</p>
+
 {% if jobs %}
 <table>
   <tr><th>App</th><th>State</th><th>Target</th><th>Size</th><th>Error</th><th>Actions</th></tr>

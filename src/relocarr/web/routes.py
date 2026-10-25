@@ -16,6 +16,7 @@ from .. import VERSION, arr
 from .. import library
 from ..arr.payloads import parse_radarr_webhook, parse_sonarr_webhook
 from ..arr.preflight import evaluate_preflight
+from ..clients.transmission import TransmissionClient
 from ..config import settings
 from ..db import session
 from ..disk_health import cache as disk_space_cache
@@ -1013,6 +1014,134 @@ def job_abort(job_id: int):
 
         conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
     return RedirectResponse("/jobs", status_code=303)
+
+
+def _cleanup_redirect_url(*, error: str | None = None, result: str | None = None) -> str:
+    params = []
+    if error:
+        params.append(f"error={quote(error)}")
+    if result:
+        params.append(f"result={quote(result)}")
+    return "/jobs/cleanup-torrents" + ("?" + "&".join(params) if params else "")
+
+
+@router.get("/jobs/cleanup-torrents")
+def jobs_cleanup_torrents(request: Request, error: str | None = None, result: str | None = None):
+    """Jobs page "Find completed torrents" button. A job reaching DONE means
+    its file was already copied, verified, and published to the target --
+    relocarr's own removal gate (jobs/worker.py) only ever STOPS the
+    matching torrent once that happens, deliberately leaving it seeding in
+    Transmission for the user to end by hand (an intentional seed period,
+    not an oversight). This finds every torrent that's both still present
+    in Transmission AND backed by a DONE job for the same download_id --
+    i.e. pure leftovers, safe to mass-delete -- without touching anything
+    still mid-transfer or still awaited by Radarr/Sonarr.
+    """
+    with session(settings.db_path) as conn:
+        apps = conn.execute("SELECT * FROM apps").fetchall()
+        done_jobs = conn.execute(
+            "SELECT app_id, download_id, target_path, size_bytes FROM jobs "
+            "WHERE state = 'DONE' AND download_id IS NOT NULL"
+        ).fetchall()
+
+    done_by_app: dict[int, dict[str, object]] = {}
+    for j in done_jobs:
+        done_by_app.setdefault(j["app_id"], {})[j["download_id"].lower()] = j
+
+    candidates = []
+    for app in apps:
+        done = done_by_app.get(app["id"])
+        if not done:
+            continue
+        with session(settings.db_path) as conn:
+            dc = conn.execute(
+                "SELECT * FROM download_clients WHERE app_id = ? LIMIT 1", (app["id"],)
+            ).fetchone()
+        if dc is None or dc["kind"] != "transmission":
+            continue
+        client = TransmissionClient(dc["host"], dc["port"], dc["username"], dc["password"])
+        try:
+            torrents = client.list_torrents()
+        except httpx.HTTPError:
+            logger.exception("could not reach Transmission for app %r", app["name"])
+            continue
+        finally:
+            client.close()
+        for t in torrents:
+            job = done.get(t.hash.lower())
+            if job is None:
+                continue
+            candidates.append(
+                {
+                    "app_id": app["id"],
+                    "app_name": app["name"],
+                    "torrent_id": t.id,
+                    "name": t.name,
+                    "size_bytes": job["size_bytes"],
+                    "target_path": job["target_path"],
+                }
+            )
+
+    return templates.TemplateResponse(
+        request,
+        "jobs_cleanup.html",
+        {"candidates": candidates, "error": error, "result": result},
+    )
+
+
+@router.post("/jobs/cleanup-torrents/delete")
+def jobs_cleanup_torrents_delete(torrents: list[str] = Form(default=[])):
+    """Bulk-deletes the torrents checked on /jobs/cleanup-torrents, removing
+    both the Transmission entry and its on-disk data. Safe specifically
+    because every candidate shown there already has a DONE job -- the file
+    was already copied, verified, and published elsewhere, so what's left
+    in Transmission's download folder is a pure duplicate. Each `torrents`
+    value is "<app_id>|<torrent_id>", same convention as the Log page's
+    bulk redownload checkboxes.
+    """
+    if not torrents:
+        return RedirectResponse(
+            _cleanup_redirect_url(error="Nothing was checked -- nothing deleted."), status_code=303
+        )
+
+    with session(settings.db_path) as conn:
+        apps_by_id = {a["id"]: a for a in conn.execute("SELECT * FROM apps").fetchall()}
+
+    by_app: dict[int, list[int]] = {}
+    for raw in torrents:
+        app_id_str, _, torrent_id_str = raw.partition("|")
+        try:
+            by_app.setdefault(int(app_id_str), []).append(int(torrent_id_str))
+        except ValueError:
+            continue
+
+    deleted = 0
+    failed = 0
+    for app_id, torrent_ids in by_app.items():
+        app = apps_by_id.get(app_id)
+        with session(settings.db_path) as conn:
+            dc = conn.execute(
+                "SELECT * FROM download_clients WHERE app_id = ? LIMIT 1", (app_id,)
+            ).fetchone()
+        if app is None or dc is None:
+            failed += len(torrent_ids)
+            continue
+        client = TransmissionClient(dc["host"], dc["port"], dc["username"], dc["password"])
+        try:
+            for torrent_id in torrent_ids:
+                try:
+                    client.remove(torrent_id, delete_data=True)
+                    deleted += 1
+                except httpx.HTTPError:
+                    logger.exception("could not remove torrent %r for app %r", torrent_id, app_id)
+                    failed += 1
+        finally:
+            client.close()
+
+    result = f"Deleted {deleted} torrent{'s' if deleted != 1 else ''}."
+    if failed:
+        result += f" {failed} failed -- see the server log."
+    return RedirectResponse(_cleanup_redirect_url(result=result), status_code=303)
 
 
 # ----------------------------------------------------------------------
