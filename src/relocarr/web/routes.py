@@ -2,6 +2,7 @@ import logging
 import os
 import secrets
 import shutil
+import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
@@ -1027,15 +1028,18 @@ def _cleanup_redirect_url(*, error: str | None = None, result: str | None = None
 
 @router.get("/jobs/cleanup-torrents")
 def jobs_cleanup_torrents(request: Request, error: str | None = None, result: str | None = None):
-    """Jobs page "Find completed torrents" button. A job reaching DONE means
-    its file was already copied, verified, and published to the target --
-    relocarr's own removal gate (jobs/worker.py) only ever STOPS the
-    matching torrent once that happens, deliberately leaving it seeding in
-    Transmission for the user to end by hand (an intentional seed period,
-    not an oversight). This finds every torrent that's both still present
-    in Transmission AND backed by a DONE job for the same download_id --
-    i.e. pure leftovers, safe to mass-delete -- without touching anything
-    still mid-transfer or still awaited by Radarr/Sonarr.
+    """Jobs page "Find completed torrents" button. jobs/worker.py's removal
+    gate already removes a torrent (and its data) automatically -- but only
+    once every sibling job sharing that download_id has reached RECONCILED,
+    and only if a download client is configured for the app. A stuck
+    sibling, a torrent that was removed from Transmission out-of-band (so
+    its hash no longer correlates to anything live), or a missing download
+    client each leave a finished torrent sitting there indefinitely with
+    nothing left to trigger the gate again. This is the manual fallback for
+    whatever the gate hasn't (or can't) caught: every torrent that's both
+    still present in Transmission AND backed by a DONE job for the same
+    download_id -- i.e. pure leftovers, safe to mass-delete -- without
+    touching anything still mid-transfer or still awaited by Radarr/Sonarr.
     """
     with session(settings.db_path) as conn:
         apps = conn.execute("SELECT * FROM apps").fetchall()
@@ -1142,6 +1146,173 @@ def jobs_cleanup_torrents_delete(torrents: list[str] = Form(default=[])):
     if failed:
         result += f" {failed} failed -- see the server log."
     return RedirectResponse(_cleanup_redirect_url(result=result), status_code=303)
+
+
+def _download_client_for_app(app_id: int) -> sqlite3.Row | None:
+    with session(settings.db_path) as conn:
+        return conn.execute(
+            "SELECT * FROM download_clients WHERE app_id = ? LIMIT 1", (app_id,)
+        ).fetchone()
+
+
+def _source_redirect_url(*, error: str | None = None, result: str | None = None) -> str:
+    params = []
+    if error:
+        params.append(f"error={quote(error)}")
+    if result:
+        params.append(f"result={quote(result)}")
+    return "/jobs/cleanup-source" + ("?" + "&".join(params) if params else "")
+
+
+@router.get("/jobs/cleanup-source")
+def jobs_cleanup_source(request: Request, error: str | None = None, result: str | None = None):
+    """Jobs page "Find transferred movies on source" button. advance_clean
+    (jobs/machine.py) only ever prunes the per-movie staging folder if it's
+    already empty -- it never deletes the media file itself, by design,
+    because while a torrent is still tracked live in Transmission that
+    file IS what Transmission is seeding from. The removal gate
+    (jobs/worker.py's _advance_removal_gate) is what's actually supposed to
+    delete it, by removing the torrent (with its data) once every sibling
+    job for that download reaches RECONCILED -- but a stuck sibling, a
+    torrent already removed from Transmission out-of-band, or no download
+    client configured at all each leave the source file sitting here
+    indefinitely, same gap as /jobs/cleanup-torrents.
+
+    This finds every DONE job whose source file still physically exists,
+    regardless of why, and shows whether it's still a live Transmission
+    torrent (so deletion goes through Transmission's own remove -- it
+    stops the torrent cleanly before touching the file) or already
+    orphaned (deleted straight off disk).
+    """
+    with session(settings.db_path) as conn:
+        apps = conn.execute("SELECT * FROM apps").fetchall()
+        done_jobs = conn.execute("SELECT * FROM jobs WHERE state = 'DONE'").fetchall()
+    apps_by_id = {a["id"]: a for a in apps}
+
+    live_hashes_by_app: dict[int, set[str]] = {}
+    for app in apps:
+        dc = _download_client_for_app(app["id"])
+        if dc is None or dc["kind"] != "transmission":
+            continue
+        client = TransmissionClient(dc["host"], dc["port"], dc["username"], dc["password"])
+        try:
+            live_hashes_by_app[app["id"]] = {t.hash.lower() for t in client.list_torrents()}
+        except httpx.HTTPError:
+            logger.exception("could not reach Transmission for app %r", app["name"])
+        finally:
+            client.close()
+
+    candidates = []
+    for job in done_jobs:
+        source = Path(job["source_path"])
+        try:
+            if not source.is_file():
+                continue
+        except OSError:
+            continue
+        app = apps_by_id.get(job["app_id"])
+        if app is None:
+            continue
+        download_id = job["download_id"]
+        seeding = bool(
+            download_id and download_id.lower() in live_hashes_by_app.get(app["id"], set())
+        )
+        candidates.append(
+            {
+                "job_id": job["id"],
+                "app_name": app["name"],
+                "name": source.name,
+                "size_bytes": job["size_bytes"],
+                "seeding": seeding,
+            }
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "jobs_cleanup_source.html",
+        {"candidates": candidates, "error": error, "result": result},
+    )
+
+
+@router.post("/jobs/cleanup-source/delete")
+def jobs_cleanup_source_delete(job_ids: list[str] = Form(default=[])):
+    """Bulk-deletes the source files checked on /jobs/cleanup-source. A job
+    still matching a live Transmission torrent is removed through
+    Transmission's own API (delete-local-data) -- it stops the torrent
+    before touching the file, rather than yanking a file out from under an
+    actively seeding torrent. Everything else (no download_id, no download
+    client, or the torrent's already gone from Transmission) is deleted
+    directly, then its now-possibly-empty staging folder is pruned the
+    same way advance_clean does.
+    """
+    ids = []
+    for raw in job_ids:
+        try:
+            ids.append(int(raw))
+        except ValueError:
+            continue
+    if not ids:
+        return RedirectResponse(
+            _source_redirect_url(error="Nothing was checked -- nothing deleted."), status_code=303
+        )
+
+    with session(settings.db_path) as conn:
+        placeholders = ",".join("?" * len(ids))
+        jobs = conn.execute(
+            f"SELECT * FROM jobs WHERE id IN ({placeholders}) AND state = 'DONE'", ids
+        ).fetchall()
+        apps_by_id = {a["id"]: a for a in conn.execute("SELECT * FROM apps").fetchall()}
+
+    deleted = 0
+    failed = 0
+    for job in jobs:
+        app = apps_by_id.get(job["app_id"])
+        source = Path(job["source_path"])
+        removed_via_transmission = False
+
+        if app is not None and job["download_id"]:
+            dc = _download_client_for_app(app["id"])
+            if dc is not None and dc["kind"] == "transmission":
+                client = TransmissionClient(dc["host"], dc["port"], dc["username"], dc["password"])
+                try:
+                    torrent = next(
+                        (
+                            t
+                            for t in client.list_torrents()
+                            if t.hash.lower() == job["download_id"].lower()
+                        ),
+                        None,
+                    )
+                    if torrent is not None:
+                        client.remove(torrent.id, delete_data=True)
+                        removed_via_transmission = True
+                except httpx.HTTPError:
+                    logger.exception("could not remove torrent for job %r via Transmission", job["id"])
+                    failed += 1
+                    continue
+                finally:
+                    client.close()
+
+        if not removed_via_transmission:
+            try:
+                if source.is_file():
+                    source.unlink()
+            except OSError:
+                logger.exception("could not delete source file for job %r: %s", job["id"], source)
+                failed += 1
+                continue
+            try:
+                if source.parent.exists() and not any(source.parent.iterdir()):
+                    source.parent.rmdir()
+            except OSError:
+                pass  # not empty (a sibling job's file still lives there) or already gone -- fine either way
+
+        deleted += 1
+
+    result = f"Deleted {deleted} file{'s' if deleted != 1 else ''} from source."
+    if failed:
+        result += f" {failed} failed -- see the server log."
+    return RedirectResponse(_source_redirect_url(result=result), status_code=303)
 
 
 # ----------------------------------------------------------------------

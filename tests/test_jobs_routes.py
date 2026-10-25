@@ -261,3 +261,134 @@ def test_cleanup_torrents_delete_with_nothing_checked_deletes_nothing(client):
     resp = client.post("/jobs/cleanup-torrents/delete", data={}, follow_redirects=False)
     assert resp.status_code == 303
     assert "error=" in resp.headers["location"]
+
+
+def _insert_radarr_app(with_client: bool = False) -> int:
+    with session(app_settings.db_path) as conn:
+        app_id = conn.execute(
+            """INSERT INTO apps (kind, name, base_url, api_key, webhook_token, staging_root, target_root)
+               VALUES ('radarr', 'Radarr', 'http://x', 'key', 'token', '/s', '/t')"""
+        ).lastrowid
+        if with_client:
+            conn.execute(
+                """INSERT INTO download_clients (app_id, kind, host, port)
+                   VALUES (?, 'transmission', 'tx-host', 9091)""",
+                (app_id,),
+            )
+        return app_id
+
+
+def _insert_done_job(app_id: int, source_path: str, *, download_id: str | None = None) -> int:
+    with session(app_settings.db_path) as conn:
+        return conn.execute(
+            """INSERT INTO jobs (app_id, download_id, media_file_id, unmonitor_id, source_path, target_path, size_bytes, state)
+               VALUES (?, ?, 'f1', 1, ?, '/t/a.mkv', 2000, 'DONE')""",
+            (app_id, download_id, source_path),
+        ).lastrowid
+
+
+def test_cleanup_source_lists_an_orphaned_file_without_a_seeding_badge(client, tmp_path):
+    source = tmp_path / "Movie.mkv"
+    source.write_bytes(b"x")
+    app_id = _insert_radarr_app()
+    _insert_done_job(app_id, str(source))
+
+    resp = client.get("/jobs/cleanup-source")
+    assert resp.status_code == 200
+    assert "Movie.mkv" in resp.text
+    assert "btn-primary);\">seeding</span>" not in resp.text
+
+
+@respx.mock
+def test_cleanup_source_marks_a_live_torrent_as_seeding(client, tmp_path):
+    source = tmp_path / "Movie.mkv"
+    source.write_bytes(b"x")
+    app_id = _insert_radarr_app(with_client=True)
+    _insert_done_job(app_id, str(source), download_id="ABCDEF123")
+    respx.post("http://tx-host:9091/transmission/rpc/").mock(
+        return_value=_torrent_get_response(
+            [
+                {
+                    "id": 5,
+                    "name": "Movie",
+                    "hashString": "abcdef123",
+                    "percentDone": 1.0,
+                    "status": 6,
+                    "downloadDir": "/downloads",
+                }
+            ]
+        )
+    )
+
+    resp = client.get("/jobs/cleanup-source")
+    assert resp.status_code == 200
+    assert "Movie.mkv" in resp.text
+    assert "btn-primary);\">seeding</span>" in resp.text
+
+
+def test_cleanup_source_ignores_a_done_job_whose_file_is_already_gone(client, tmp_path):
+    missing = tmp_path / "gone.mkv"  # never created
+    app_id = _insert_radarr_app()
+    _insert_done_job(app_id, str(missing))
+
+    resp = client.get("/jobs/cleanup-source")
+    assert resp.status_code == 200
+    assert "No transferred movies left on source" in resp.text
+
+
+def test_cleanup_source_delete_removes_file_directly_when_not_seeding(client, tmp_path):
+    source = tmp_path / "Movie.mkv"
+    source.write_bytes(b"x")
+    app_id = _insert_radarr_app()
+    job_id = _insert_done_job(app_id, str(source))
+
+    resp = client.post(
+        "/jobs/cleanup-source/delete", data={"job_ids": [str(job_id)]}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert not source.exists()
+
+
+@respx.mock
+def test_cleanup_source_delete_removes_via_transmission_when_seeding(client, tmp_path):
+    source = tmp_path / "Movie.mkv"
+    source.write_bytes(b"x")
+    app_id = _insert_radarr_app(with_client=True)
+    job_id = _insert_done_job(app_id, str(source), download_id="ABCDEF123")
+    route = respx.post("http://tx-host:9091/transmission/rpc/").mock(
+        side_effect=[
+            _torrent_get_response(
+                [
+                    {
+                        "id": 5,
+                        "name": "Movie",
+                        "hashString": "abcdef123",
+                        "percentDone": 1.0,
+                        "status": 6,
+                        "downloadDir": "/downloads",
+                    }
+                ]
+            ),
+            httpx.Response(200, json={"result": "success", "arguments": {}}),
+        ]
+    )
+
+    resp = client.post(
+        "/jobs/cleanup-source/delete", data={"job_ids": [str(job_id)]}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    # Removed through Transmission, not a direct unlink -- the mocked RPC
+    # never touches the real filesystem, so the file surviving confirms
+    # the direct-delete branch was correctly skipped.
+    assert source.exists()
+
+    import json
+
+    body = json.loads(route.calls[-1].request.content)
+    assert body == {"method": "torrent-remove", "arguments": {"ids": [5], "delete-local-data": True}}
+
+
+def test_cleanup_source_delete_with_nothing_checked_deletes_nothing(client):
+    resp = client.post("/jobs/cleanup-source/delete", data={}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert "error=" in resp.headers["location"]

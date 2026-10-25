@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block nav_jobs %}active{% endblock %}
+{% block content %}
+<h1>Transferred movies still on source</h1>
+
+<p style="margin: 0 0 16px; color: var(--text-dim); font-size: 13px;">
+  Every row below already finished relocarr's whole pipeline -- copied, verified, and published to
+  its target folder -- but the original file is still sitting on the source disk (the staging /
+  Transmission download folder). Rows marked <strong>seeding</strong> are still a live torrent in
+  Transmission; deleting one of those goes through Transmission itself, which stops it cleanly
+  first. Everything else is deleted directly from disk. Either way the file is gone for good.
+</p>
+
+{% if error %}
+<div class="card" style="margin-bottom: 16px; border-color: var(--btn-danger);">
+  <p style="margin: 0; color: var(--btn-danger); font-size: 13px;">{{ error }}</p>
+</div>
+{% endif %}
+{% if result %}
+<div class="card" style="margin-bottom: 16px;">
+  <p style="margin: 0; color: #81c995; font-size: 13px;">{{ result }}</p>
+</div>
+{% endif %}
+
+{% if candidates %}
+<form id="cleanup-source-form" method="post" action="/jobs/cleanup-source/delete" style="margin: 0 0 8px;">
+  <button type="submit" style="font-size: 13px; background: var(--btn-danger);">Delete checked files from source</button>
+  <span style="color: var(--text-dim); font-size: 11px; margin-left: 8px;">check the rows below you want, then submit -- nothing is deleted if nothing's checked</span>
+</form>
+<table>
+  <tr><th></th><th>App</th><th>File</th><th>Size</th><th></th></tr>
+  {% for c in candidates %}
+  <tr>
+    <td><input type="checkbox" name="job_ids" value="{{ c.job_id }}" form="cleanup-source-form"></td>
+    <td>{{ c.app_name }}</td>
+    <td style="font-size: 12px;">{{ c.name }}</td>
+    <td>{{ (c.size_bytes / (1024**3)) | round(2) }} GB</td>
+    <td>{% if c.seeding %}<span class="badge" style="background: var(--btn-primary);">seeding</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="card empty-state">No transferred movies left on source right now.</div>
+{% endif %}
+{% endblock %}

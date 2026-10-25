@@ -3,8 +3,9 @@
 {% block content %}
 <h1>Jobs</h1>
 
-<p style="margin: 0 0 20px;">
+<p style="margin: 0 0 20px; display: flex; gap: 10px; flex-wrap: wrap;">
   <a href="/jobs/cleanup-torrents" style="display: inline-block; padding: 8px 18px; border-radius: 3px; background: var(--btn-primary); color: white; text-decoration: none; font-size: 14px;">Find completed torrents still in Transmission</a>
+  <a href="/jobs/cleanup-source" style="display: inline-block; padding: 8px 18px; border-radius: 3px; background: var(--btn-primary); color: white; text-decoration: none; font-size: 14px;">Find transferred movies on source</a>
 </p>
 
 {% if jobs %}
