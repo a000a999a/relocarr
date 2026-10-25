@@ -41,6 +41,7 @@ def test_scan_movie_files_finds_video_files_in_radarr_target(tmp_path):
     assert sizes["Movie One.mkv"] == 100
     assert sizes["Movie Two.mp4"] == 200
     assert unreachable == []
+    assert all(isinstance(f["mtime"], float) for f in files)
 
 
 def test_scan_movie_files_ignores_sonarr_apps(tmp_path):

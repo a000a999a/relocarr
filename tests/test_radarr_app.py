@@ -67,6 +67,56 @@ def test_build_movie_index_by_path_only_includes_movies_with_a_file():
 
 
 @respx.mock
+def test_build_movie_index_extracts_poster_url_preferring_tmdbs_remote_url():
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 1,
+                    "title": "Has Remote Poster",
+                    "year": 2020,
+                    "qualityProfileId": 1,
+                    "monitored": True,
+                    "images": [
+                        {"coverType": "fanart", "remoteUrl": "https://image.tmdb.org/fanart.jpg"},
+                        {
+                            "coverType": "poster",
+                            "url": "/MediaCover/1/poster.jpg",
+                            "remoteUrl": "https://image.tmdb.org/poster.jpg",
+                        },
+                    ],
+                },
+                {
+                    "id": 2,
+                    "title": "Local Poster Only",
+                    "year": 2021,
+                    "qualityProfileId": 1,
+                    "monitored": True,
+                    "images": [{"coverType": "poster", "url": "/MediaCover/2/poster.jpg"}],
+                },
+                {
+                    "id": 3,
+                    "title": "No Poster At All",
+                    "year": 2022,
+                    "qualityProfileId": 1,
+                    "monitored": True,
+                    "images": [],
+                },
+            ],
+        )
+    )
+
+    _, by_title_year = client.build_movie_index()
+    client.close()
+
+    assert by_title_year[("has remote poster", 2020)].poster_url == "https://image.tmdb.org/poster.jpg"
+    assert by_title_year[("local poster only", 2021)].poster_url == "http://radarr:7878/MediaCover/2/poster.jpg"
+    assert by_title_year[("no poster at all", 2022)].poster_url is None
+
+
+@respx.mock
 def test_find_movie_by_file_path_returns_none_when_unmatched():
     client = RadarrApp("http://radarr:7878", "key")
     respx.get("http://radarr:7878/api/v3/movie").mock(return_value=httpx.Response(200, json=[]))

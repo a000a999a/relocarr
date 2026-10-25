@@ -181,6 +181,18 @@ class RadarrApp:
         by_title_year: dict[tuple[str, int | None], MovieMatch] = {}
         for m in resp.json():
             movie_file = m.get("movieFile")
+            poster_url = None
+            for img in m.get("images") or []:
+                if img.get("coverType") == "poster":
+                    # remoteUrl is a direct TMDB-hosted https URL -- no
+                    # Radarr auth needed for the browser to load it. Only
+                    # fall back to Radarr's own `url` (relative to Radarr's
+                    # own base, e.g. /MediaCover/123/poster.jpg) when TMDB
+                    # never gave Radarr a remote one to begin with.
+                    poster_url = img.get("remoteUrl") or (
+                        f"{self.base_url}{img['url']}" if img.get("url") else None
+                    )
+                    break
             match = MovieMatch(
                 movie_id=m["id"],
                 movie_file_id=movie_file["id"] if movie_file else None,
@@ -188,6 +200,7 @@ class RadarrApp:
                 title=m.get("title", ""),
                 monitored=m.get("monitored", False),
                 has_file=bool(movie_file),
+                poster_url=poster_url,
             )
             if movie_file:
                 by_path[movie_file["path"]] = match

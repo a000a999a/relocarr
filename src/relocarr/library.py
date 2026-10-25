@@ -120,7 +120,7 @@ def scan_movie_files(apps: list[sqlite3.Row]) -> tuple[list[dict], list[str]]:
             try:
                 if not path.is_file():
                     continue
-                size_bytes = path.stat().st_size
+                st = path.stat()
             except OSError:
                 continue
             files.append(
@@ -129,7 +129,13 @@ def scan_movie_files(apps: list[sqlite3.Row]) -> tuple[list[dict], list[str]]:
                     "path": str(path),
                     "app_id": app["id"],
                     "app_name": app["name"],
-                    "size_bytes": size_bytes,
+                    "size_bytes": st.st_size,
+                    # st_mtime, not a true birth time -- Linux's plain
+                    # os.stat() has no birth-time field (unlike macOS/BSD's
+                    # st_birthtime). For a file relocarr or Radarr writes
+                    # once and never modifies again, "last written" and
+                    # "first appeared" are the same moment in practice.
+                    "mtime": st.st_mtime,
                 }
             )
     return files, unreachable_roots

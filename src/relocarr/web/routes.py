@@ -658,6 +658,9 @@ def transfer_log(
         )
         if filtered_movie_files:
             _enrich_with_radarr_matches(apps, filtered_movie_files)
+            for f in filtered_movie_files:
+                mtime = f.get("mtime")
+                f["mtime_str"] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d") if mtime else None
 
     capacity_projection = []
     seen_target_roots: set[str] = set()

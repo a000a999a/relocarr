@@ -71,7 +71,7 @@
   unparseable filename have no checkbox -- there's nothing reliable to act on.
 </p>
 <table style="margin-bottom: 24px;">
-  <tr><th></th><th>App</th><th>File</th><th>Size</th><th>Action</th></tr>
+  <tr><th></th><th></th><th>App</th><th>File</th><th>Size</th><th>Created</th><th>Action</th></tr>
   {% for f in filtered_movie_files %}
   <tr>
     <td>
@@ -79,9 +79,15 @@
       <input type="checkbox" name="paths" value="{{ f.app_id }}|{{ f.path }}" form="bulk-redownload-form">
       {% endif %}
     </td>
+    <td>
+      {% if f.movie_match and f.movie_match.poster_url %}
+      <img src="{{ f.movie_match.poster_url }}" alt="" loading="lazy" style="width: 36px; height: 54px; object-fit: cover; border-radius: 2px; display: block;">
+      {% endif %}
+    </td>
     <td>{{ f.app_name }}</td>
     <td style="font-size: 12px;">{{ f.name }}</td>
     <td>{{ (f.size_bytes / (1024**3)) | round(2) }} GB</td>
+    <td style="font-size: 12px; white-space: nowrap;">{{ f.mtime_str }}</td>
     <td>
       {% if f.redownload_action == 'unknown' %}
       <span style="color: var(--text-dim); font-size: 11px;">can't parse title/year from filename</span>

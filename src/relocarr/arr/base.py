@@ -56,6 +56,7 @@ class MovieMatch:
     title: str
     monitored: bool
     has_file: bool
+    poster_url: str | None = None
 
 
 @dataclass

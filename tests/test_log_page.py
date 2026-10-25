@@ -206,6 +206,38 @@ def test_log_shows_replace_action_for_a_file_radarr_still_has(client, tmp_path):
 
 
 @respx.mock
+def test_log_shows_created_date_and_poster_for_a_file_radarr_still_has(client, tmp_path):
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-poster")
+    movie_library_cache.files = [
+        {**_file(app_id, "Big.mkv", 5), "mtime": time.mktime((2026, 3, 4, 0, 0, 0, 0, 0, -1))}
+    ]
+    movie_library_cache.scanned_at = time.time()
+
+    respx.get("http://radarr-poster/api/v3/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 42,
+                    "title": "Big Movie",
+                    "year": 2020,
+                    "qualityProfileId": 1,
+                    "monitored": True,
+                    "movieFile": {"id": 99, "path": "/t/Big.mkv"},
+                    "images": [{"coverType": "poster", "remoteUrl": "https://image.tmdb.org/big.jpg"}],
+                }
+            ],
+        )
+    )
+    respx.get("http://radarr-poster/api/v3/qualityprofile").mock(return_value=httpx.Response(200, json=[]))
+
+    resp = client.get("/log?min_gb=4")
+    assert resp.status_code == 200
+    assert "2026-03-04" in resp.text
+    assert 'src="https://image.tmdb.org/big.jpg"' in resp.text
+
+
+@respx.mock
 def test_log_shows_remonitor_action_for_a_movie_radarr_lost_track_of(client, tmp_path):
     # This is relocarr's own normal end state for an already-processed
     # movie: unmonitored, no file, but still a known title/year in Radarr.
