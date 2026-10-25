@@ -3,6 +3,7 @@ services:
     build: .
     container_name: relocarr
     restart: unless-stopped
+    init: true
     environment:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
