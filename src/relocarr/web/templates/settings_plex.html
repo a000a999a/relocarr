@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block nav_settings %}active{% endblock %}
+{% block nav_settings_plex %}active{% endblock %}
+{% block content %}
+<h1>Plex</h1>
+<p style="color: var(--text-dim); font-size: 13px; max-width: 640px; margin-top: -10px;">
+  Optional -- only used to show each file's real resolution, codec, and bitrate on the Library
+  page's duplicate review (relocarr's own file scan can only ever see a filename and a size, not
+  what's actually inside the file). Leave blank to skip this entirely; duplicate review still
+  works without it, just without the quality columns.
+</p>
+
+{% if connection_error %}<div class="error">{{ connection_error }}</div>{% endif %}
+{% if connection_result %}
+<div class="card" style="margin-bottom: 16px;">
+  <p style="margin: 0; color: #81c995; font-size: 13px;">Connected -- Plex Media Server {{ connection_result.version }}.</p>
+</div>
+{% endif %}
+
+<form method="post" action="/settings/plex">
+  <label for="plex_base_url">URL</label>
+  <input type="url" name="plex_base_url" id="plex_base_url" placeholder="http://plex:32400" value="{{ plex_settings.plex_base_url or '' }}">
+
+  <label for="plex_token">X-Plex-Token</label>
+  <input type="text" name="plex_token" id="plex_token" value="{{ plex_settings.plex_token or '' }}" placeholder="find yours: support.plex.tv -> Finding an authentication token / X-Plex-Token">
+
+  <button type="submit">Test &amp; Save</button>
+</form>
+{% endblock %}

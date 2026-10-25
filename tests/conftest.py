@@ -2,6 +2,7 @@ import pytest
 
 from relocarr.disk_health import cache as disk_space_cache
 from relocarr.library import cache as movie_library_cache
+from relocarr.plex import cache as plex_quality_cache
 from relocarr.version_check import cache as version_check_cache
 
 
@@ -52,3 +53,17 @@ def _reset_version_check_cache():
     version_check_cache.latest_version = None
     version_check_cache.checked_at = None
     version_check_cache.error = None
+
+
+@pytest.fixture(autouse=True)
+def _reset_plex_quality_cache():
+    """Same reasoning as the other caches above: relocarr.plex.cache is a
+    module-level singleton /log/duplicates reads on every render.
+    """
+    plex_quality_cache.index = {}
+    plex_quality_cache.checked_at = None
+    plex_quality_cache.error = None
+    yield
+    plex_quality_cache.index = {}
+    plex_quality_cache.checked_at = None
+    plex_quality_cache.error = None

@@ -10,6 +10,7 @@ from relocarr.config import settings as app_settings
 from relocarr.db import init_db, session
 from relocarr.disk_health import cache as disk_space_cache
 from relocarr.library import cache as movie_library_cache
+from relocarr.plex import cache as plex_quality_cache
 
 
 @pytest.fixture
@@ -697,6 +698,35 @@ def test_redownload_bulk_with_nothing_checked_does_nothing(client):
     resp = client.post("/log/redownload-bulk", data={})
     assert resp.status_code == 200
     assert "No files were checked" in resp.text
+
+
+def test_duplicates_page_shows_plex_quality_when_configured(client):
+    app_id = _insert_app("radarr", "/t")
+    path = "/t/Example Feature.1982.mp4"
+    movie_library_cache.files = [
+        _file(app_id, "Example Feature (1982).mkv", 4),
+        _file(app_id, "Example Feature.1982.mp4", 1, path=path),
+    ]
+    plex_quality_cache.checked_at = time.time()
+    plex_quality_cache.index = {path: {"resolution": "1080", "codec": "hevc", "bitrate": 8000}}
+
+    resp = client.get("/log/duplicates")
+    assert resp.status_code == 200
+    assert "1080p" in resp.text
+    assert "HEVC" in resp.text
+    assert "8.0 Mbps" in resp.text
+
+
+def test_duplicates_page_hints_to_configure_plex_when_not_set_up(client):
+    app_id = _insert_app("radarr", "/t")
+    movie_library_cache.files = [
+        _file(app_id, "Example Feature (1982).mkv", 4),
+        _file(app_id, "Example Feature.1982.mp4", 1),
+    ]
+
+    resp = client.get("/log/duplicates")
+    assert resp.status_code == 200
+    assert "/settings/plex" in resp.text
 
 
 def test_duplicates_page_groups_files_sharing_title_and_year(client):

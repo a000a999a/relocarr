@@ -1,0 +1,3 @@
+# Exact flagged texts that are actually harmless, functionally-required
+# strings in this codebase. Case-insensitive, one per line.
+identity

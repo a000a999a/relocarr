@@ -9,6 +9,10 @@
   which copy (or copies) to delete; nothing here happens automatically. A file Radarr still
   actively tracks is removed through Radarr's own API so its database stays consistent; anything
   else is deleted straight from disk.
+  {% if not plex_configured %}
+  Add a <a href="/settings/plex" style="color: var(--accent);">Plex connection</a> to also see each
+  file's real resolution, codec, and bitrate here -- without one, size is the only signal shown.
+  {% endif %}
 </p>
 
 {% if error %}
@@ -31,7 +35,7 @@
 {% for group in duplicate_groups %}
 <div class="card" style="margin-bottom: 16px; padding: 12px;">
   <table>
-    <tr><th><input type="checkbox" class="select-all" title="select all"></th><th></th><th>App</th><th>File</th><th>Size</th><th>Created</th></tr>
+    <tr><th><input type="checkbox" class="select-all" title="select all"></th><th></th><th>App</th><th>File</th><th>Size</th><th>Created</th><th>Quality</th></tr>
     {% for f in group %}
     <tr>
       <td><input type="checkbox" name="paths" value="{{ f.app_id }}|{{ f.path }}" form="duplicates-form"></td>
@@ -44,6 +48,15 @@
       <td style="font-size: 12px;">{{ f.name }}</td>
       <td>{{ (f.size_bytes / (1024**3)) | round(2) }} GB</td>
       <td style="font-size: 12px; white-space: nowrap;">{{ f.mtime_str }}</td>
+      <td style="font-size: 12px; white-space: nowrap;">
+        {% if f.plex_quality %}
+          {% if f.plex_quality.resolution %}{{ f.plex_quality.resolution }}p{% endif %}
+          {% if f.plex_quality.codec %}{{ f.plex_quality.codec | upper }}{% endif %}
+          {% if f.plex_quality.bitrate %}{{ (f.plex_quality.bitrate / 1000) | round(1) }} Mbps{% endif %}
+        {% elif plex_configured %}
+          <span style="color: var(--text-dim);">not matched in Plex</span>
+        {% endif %}
+      </td>
     </tr>
     {% endfor %}
   </table>

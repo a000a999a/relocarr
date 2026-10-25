@@ -1,6 +1,8 @@
 import time
 
+import httpx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 
 from relocarr.config import settings as app_settings
@@ -253,3 +255,48 @@ def test_sidebar_badge_shows_error_for_unreachable_disk(client):
     resp = client.get("/log")
     assert resp.status_code == 200
     assert 'class="nav-badge error"' in resp.text
+
+
+def test_plex_settings_page_renders_with_defaults(client):
+    resp = client.get("/settings/plex")
+    assert resp.status_code == 200
+    assert "Plex" in resp.text
+
+
+@respx.mock
+def test_plex_settings_save_tests_the_connection_and_saves_on_success(client):
+    respx.get("http://plex:32400/identity").mock(
+        return_value=httpx.Response(200, json={"MediaContainer": {"version": "1.40.0"}})
+    )
+
+    resp = client.post(
+        "/settings/plex",
+        data={"plex_base_url": "http://plex:32400", "plex_token": "tok"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    with session(app_settings.db_path) as conn:
+        rows = {
+            r["key"]: r["value"]
+            for r in conn.execute(
+                "SELECT key, value FROM settings WHERE key IN ('plex_base_url', 'plex_token')"
+            ).fetchall()
+        }
+    assert rows["plex_base_url"] == "http://plex:32400"
+    assert rows["plex_token"] == "tok"
+
+
+@respx.mock
+def test_plex_settings_save_does_not_persist_on_a_failed_connection(client):
+    respx.get("http://plex:32400/identity").mock(return_value=httpx.Response(401))
+
+    resp = client.post(
+        "/settings/plex", data={"plex_base_url": "http://plex:32400", "plex_token": "bad"}
+    )
+    assert resp.status_code == 200
+    assert "Connection failed" in resp.text
+
+    with session(app_settings.db_path) as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'plex_token'").fetchone()
+    assert row["value"] == ""  # still the default -- the failed attempt was never saved

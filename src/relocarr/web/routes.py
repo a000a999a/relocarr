@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 
 from .. import VERSION, arr
 from .. import library
+from .. import plex
 from ..arr.payloads import parse_radarr_webhook, parse_sonarr_webhook
 from ..arr.preflight import evaluate_preflight
 from ..clients.transmission import TransmissionClient
@@ -24,10 +25,11 @@ from ..disk_health import cache as disk_space_cache
 from ..library import cache as movie_library_cache
 from ..library import find_duplicate_groups
 from ..library import parse_title_year
-from ..version_check import cache as version_check_cache
-from ..version_check import is_newer
+from ..plex import cache as plex_quality_cache
 from ..transfer.layout import compute_target_path
 from ..transfer.safety import PathSafetyError, assert_distinct_roots
+from ..version_check import cache as version_check_cache
+from ..version_check import is_newer
 
 logger = logging.getLogger(__name__)
 
@@ -432,6 +434,76 @@ def settings_general_submit(
                 (key, value),
             )
     return RedirectResponse("/settings/general", status_code=303)
+
+
+# ----------------------------------------------------------------------
+# Settings > Plex -- optional, only used to show real resolution/codec/
+# bitrate on /log/duplicates (library.py's own file scan can only ever
+# see a filename and a size, not what's actually inside the file).
+# Singleton: one Plex server, stored as two more rows in the generic
+# `settings` table rather than a dedicated table, same as dry_run etc.
+# ----------------------------------------------------------------------
+
+
+@router.get("/settings/plex")
+def settings_plex_form(request: Request):
+    with session(settings.db_path) as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM settings WHERE key IN ('plex_base_url', 'plex_token')"
+        ).fetchall()
+    return templates.TemplateResponse(
+        request,
+        "settings_plex.html",
+        {
+            "plex_settings": {r["key"]: r["value"] for r in rows},
+            "connection_result": None,
+            "connection_error": None,
+        },
+    )
+
+
+@router.post("/settings/plex")
+def settings_plex_submit(
+    request: Request,
+    plex_base_url: str = Form(""),
+    plex_token: str = Form(""),
+):
+    connection_result = None
+    connection_error = None
+    if plex_base_url and plex_token:
+        client = plex.PlexClient(plex_base_url, plex_token)
+        try:
+            result = client.test_connection()
+        finally:
+            client.close()
+        if not result.ok:
+            connection_error = f"Connection failed: {result.error}. Not saved -- the previous settings are still in effect."
+        else:
+            connection_result = result
+
+    if connection_error:
+        with session(settings.db_path) as conn:
+            rows = conn.execute(
+                "SELECT key, value FROM settings WHERE key IN ('plex_base_url', 'plex_token')"
+            ).fetchall()
+        return templates.TemplateResponse(
+            request,
+            "settings_plex.html",
+            {
+                "plex_settings": {r["key"]: r["value"] for r in rows},
+                "connection_result": None,
+                "connection_error": connection_error,
+            },
+        )
+
+    with session(settings.db_path) as conn:
+        for key, value in {"plex_base_url": plex_base_url, "plex_token": plex_token}.items():
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+    return RedirectResponse("/settings/plex", status_code=303)
 
 
 # ----------------------------------------------------------------------
@@ -1031,11 +1103,20 @@ def log_duplicates(request: Request, error: str | None = None, result: str | Non
         for f in all_files:
             mtime = f.get("mtime")
             f["mtime_str"] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d") if mtime else None
+            # Read-only lookup against the background-cached Plex index,
+            # same "never a live external call inside a request" rule as
+            # disk_health/library/version_check -- see plex.py.
+            f["plex_quality"] = plex_quality_cache.index.get(f["path"])
 
     return templates.TemplateResponse(
         request,
         "log_duplicates.html",
-        {"duplicate_groups": duplicate_groups, "error": error, "result": result},
+        {
+            "duplicate_groups": duplicate_groups,
+            "error": error,
+            "result": result,
+            "plex_configured": bool(plex_quality_cache.checked_at or plex_quality_cache.index),
+        },
     )
 
 

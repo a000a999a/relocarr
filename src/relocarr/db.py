@@ -95,6 +95,8 @@ DEFAULT_SETTINGS = {
     "poll_interval_seconds": "15",
     "sidecar_extensions": "srt",
     "verify_mode": "size",  # 'size' | 'checksum'
+    "plex_base_url": "",  # empty = not configured yet; see plex.py
+    "plex_token": "",
 }
 
 

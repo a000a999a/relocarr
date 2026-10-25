@@ -12,6 +12,8 @@ from .disk_health import run_disk_space_check_forever
 from .jobs.scheduler import run_forever
 from .library import cache as movie_library_cache
 from .library import run_library_scan_forever
+from .plex import cache as plex_quality_cache
+from .plex import run_plex_quality_check_forever
 from .version_check import cache as version_check_cache
 from .version_check import run_version_check_forever
 from .web.csrf import csrf_guard
@@ -43,12 +45,16 @@ async def lifespan(app: FastAPI):
         run_disk_space_check_forever(settings.db_path, disk_space_cache, stop_event)
     )
     version_check_task = asyncio.create_task(run_version_check_forever(version_check_cache, stop_event))
+    plex_quality_task = asyncio.create_task(
+        run_plex_quality_check_forever(settings.db_path, plex_quality_cache, stop_event)
+    )
     yield
     stop_event.set()
     await scheduler_task
     await library_scan_task
     await disk_space_task
     await version_check_task
+    await plex_quality_task
 
 
 app = FastAPI(title="relocarr", lifespan=lifespan)
