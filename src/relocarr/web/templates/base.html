@@ -105,5 +105,75 @@
   <main>
     {% block content %}{% endblock %}
   </main>
+  <script>
+    // Generic click-to-sort for every table in the app, applied here once
+    // rather than wired per-page: a plain server-rendered table has no
+    // inherent column type, so this sorts each column by number (stripping
+    // a trailing GB/MB/KB unit, e.g. "2.43 GB") when the WHOLE cell text
+    // matches that shape, falling back to a case-insensitive string sort
+    // otherwise -- which also correctly orders "YYYY-MM-DD"-style date
+    // columns, since lexicographic order already matches chronological
+    // order for that format. Header cells with no text (checkbox/poster
+    // columns) are skipped -- there's no sensible key to sort by.
+    (function () {
+      var NUMERIC_RE = /^-?\d+(\.\d+)?\s*(GB|MB|KB)?$/i;
+
+      function sortKey(cell) {
+        var text = cell.textContent.trim();
+        if (NUMERIC_RE.test(text)) {
+          return { num: parseFloat(text) };
+        }
+        return { str: text.toLowerCase() };
+      }
+
+      function compareKeys(a, b) {
+        if (a.num !== undefined && b.num !== undefined) return a.num - b.num;
+        var as = a.str !== undefined ? a.str : String(a.num);
+        var bs = b.str !== undefined ? b.str : String(b.num);
+        if (as < bs) return -1;
+        if (as > bs) return 1;
+        return 0;
+      }
+
+      document.querySelectorAll("table").forEach(function (table) {
+        var headerRow = table.querySelector("tr");
+        if (!headerRow) return;
+        var headerCells = Array.prototype.slice.call(headerRow.children);
+        var state = { index: -1, dir: 1 };
+
+        headerCells.forEach(function (th, index) {
+          if (!th.textContent.trim()) return;
+          th.style.cursor = "pointer";
+          th.style.userSelect = "none";
+          var indicator = document.createElement("span");
+          indicator.style.marginLeft = "4px";
+          indicator.style.opacity = "0.6";
+          th.appendChild(indicator);
+
+          th.addEventListener("click", function () {
+            var dir = state.index === index ? -state.dir : 1;
+            state = { index: index, dir: dir };
+
+            headerCells.forEach(function (c) {
+              var span = c.querySelector("span");
+              if (span) span.textContent = "";
+            });
+            indicator.textContent = dir === 1 ? "▲" : "▼";
+
+            var rows = Array.prototype.slice.call(table.querySelectorAll("tr")).slice(1);
+            rows.sort(function (r1, r2) {
+              var c1 = r1.children[index];
+              var c2 = r2.children[index];
+              if (!c1 || !c2) return 0;
+              return dir * compareKeys(sortKey(c1), sortKey(c2));
+            });
+            rows.forEach(function (row) {
+              table.appendChild(row);
+            });
+          });
+        });
+      });
+    })();
+  </script>
 </body>
 </html>
