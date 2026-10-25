@@ -1138,7 +1138,11 @@ def log_duplicates(request: Request, error: str | None = None, result: str | Non
             # Read-only lookup against the background-cached Plex index,
             # same "never a live external call inside a request" rule as
             # disk_health/library/version_check -- see plex.py.
-            f["plex_quality"] = plex_quality_cache.index.get(f["path"])
+            # Matched by filename, not full path -- Plex (on the Shield
+            # itself) and relocarr's own scan (via the CIFS mount) report
+            # completely different absolute paths for the same file; see
+            # plex.py's build_quality_index.
+            f["plex_quality"] = plex_quality_cache.index.get(Path(f["path"]).name)
 
     return templates.TemplateResponse(
         request,

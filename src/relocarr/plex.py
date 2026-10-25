@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import httpx
 
@@ -58,12 +58,18 @@ class PlexClient:
             return ConnectionTestResult(ok=False, error=str(exc))
 
     def build_quality_index(self) -> dict[str, dict]:
-        """Every movie library section's items, indexed by each file's real
-        filesystem path (Media[].Part[].file -- the same absolute path
-        relocarr's own library scan already uses, since both read the
-        identical bind-mounted target folder). One GET /library/sections
-        plus one GET /library/sections/{id}/all per movie-type section,
-        not one call per file.
+        """Every movie library section's items, indexed by each file's
+        BASENAME, not its full path -- confirmed live, 2026-10-25: Plex
+        (running on the Shield itself, with its own local storage path,
+        e.g. /storage/3ACB-9090/movies/...) reports a completely different
+        absolute path than relocarr's own library scan sees for the exact
+        same file (via the CIFS mount, e.g. /mnt/nvidia/movies/...) -- a
+        full-path index never matched anything. Filenames always carry
+        title and year (Radarr's own naming format guarantees this), so a
+        basename collision between two actually-different movies isn't a
+        realistic risk here. One GET /library/sections plus one GET
+        /library/sections/{id}/all per movie-type section, not one call
+        per file.
         """
         sections_resp = self._client.get("/library/sections")
         sections_resp.raise_for_status()
@@ -87,7 +93,7 @@ class PlexClient:
                     for part in media.get("Part", []):
                         path = part.get("file")
                         if path:
-                            index[path] = quality
+                            index[PurePosixPath(path).name] = quality
         return index
 
     def close(self) -> None:

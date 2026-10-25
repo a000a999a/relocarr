@@ -65,7 +65,10 @@ def test_build_quality_index_only_scans_movie_sections():
                                     "videoResolution": "1080",
                                     "videoCodec": "hevc",
                                     "bitrate": 8000,
-                                    "Part": [{"file": "/mnt/nvidia/movies/Example Feature.1982.mkv"}],
+                                    # Deliberately a different path shape than relocarr's own
+                                    # scan would ever report (Plex sees its own local storage
+                                    # path, not the CIFS mount path) -- the point of this test.
+                                    "Part": [{"file": "/storage/xyz/movies/Example Feature.1982.mkv"}],
                                 }
                             ],
                         }
@@ -80,7 +83,9 @@ def test_build_quality_index_only_scans_movie_sections():
 
     assert movies_route.called
     assert index == {
-        "/mnt/nvidia/movies/Example Feature.1982.mkv": {
+        # Keyed by basename only -- matches relocarr's own scan's path for
+        # the same file despite the two being completely different above.
+        "Example Feature.1982.mkv": {
             "resolution": "1080",
             "codec": "hevc",
             "bitrate": 8000,

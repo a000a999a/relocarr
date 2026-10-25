@@ -702,13 +702,18 @@ def test_redownload_bulk_with_nothing_checked_does_nothing(client):
 
 def test_duplicates_page_shows_plex_quality_when_configured(client):
     app_id = _insert_app("radarr", "/t")
+    # Plex reports its own, completely different path for the same file
+    # (it runs on the Shield itself with a local storage path, relocarr
+    # sees it via the CIFS mount) -- matched by filename, not full path.
     path = "/t/Example Feature.1982.mp4"
     movie_library_cache.files = [
         _file(app_id, "Example Feature (1982).mkv", 4),
         _file(app_id, "Example Feature.1982.mp4", 1, path=path),
     ]
     plex_quality_cache.checked_at = time.time()
-    plex_quality_cache.index = {path: {"resolution": "1080", "codec": "hevc", "bitrate": 8000}}
+    plex_quality_cache.index = {
+        "Example Feature.1982.mp4": {"resolution": "1080", "codec": "hevc", "bitrate": 8000}
+    }
 
     resp = client.get("/log/duplicates")
     assert resp.status_code == 200
