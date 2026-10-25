@@ -105,7 +105,7 @@ def test_system_page_renders_with_no_apps(client):
     resp = client.get("/system")
     assert resp.status_code == 200
     assert "No apps configured yet." in resp.text
-    assert "0.1.0" in resp.text  # version
+    assert "1.0.0" in resp.text  # version
 
 
 def test_system_page_shows_disk_space_for_configured_paths(client, tmp_path):

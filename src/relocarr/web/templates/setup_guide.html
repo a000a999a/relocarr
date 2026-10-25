@@ -70,6 +70,14 @@
       <td>Sidecars are only copied if the *arr imported them in the first place.</td>
     </tr>
   </table>
+  <p style="font-size: 12px; color: var(--text-dim); margin-top: 12px;">
+    Even with the Webhook connected correctly, a single delivery can still be lost -- confirmed
+    live, 2026-10-25: Radarr doesn't retry a failed webhook send, so one landing during a relocarr
+    restart leaves that import fully done on Radarr's side but completely untracked by relocarr,
+    with nothing to notice on its own. Check <strong>Queue &rarr; Find untracked Radarr
+    imports</strong> occasionally, especially right after restarting relocarr, to catch anything
+    the webhook missed.
+  </p>
 </div>
 
 <div class="card">
