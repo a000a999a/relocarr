@@ -91,6 +91,31 @@ def remove_larger_duplicates(target_path: Path, keep_size_bytes: int) -> list[st
     return removed
 
 
+def find_duplicate_groups(files: list[dict]) -> list[list[dict]]:
+    """Groups already-scanned files (scan_movie_files's cache) by parsed
+    (title, year) -- the same grouping Plex's own "Duplicates" library
+    filter uses -- and returns only groups with more than one file. Unlike
+    remove_larger_duplicates (which only ever fires right after a brand
+    new file lands, and only ever removes something strictly larger than
+    it), this surfaces every duplicate already sitting in the library for
+    a human to review and pick from manually -- there's no "obviously
+    correct" file to keep here, just what a reviewer decides after
+    actually looking (a smaller file isn't always the better one; a
+    larger file isn't always worth keeping either). Each group's files
+    are sorted largest first, so the one most likely worth deleting is
+    the first thing a reviewer sees.
+    """
+    groups: dict[tuple[str, int], list[dict]] = {}
+    for f in files:
+        parsed = parse_title_year(f.get("name", ""))
+        if parsed is None:
+            continue
+        groups.setdefault(parsed, []).append(f)
+    return [
+        sorted(g, key=lambda f: f["size_bytes"], reverse=True) for g in groups.values() if len(g) > 1
+    ]
+
+
 def scan_movie_files(apps: list[sqlite3.Row]) -> tuple[list[dict], list[str]]:
     """Walk every configured Radarr target folder and return each movie
     file's name, owning app, and size, plus any target root that wasn't

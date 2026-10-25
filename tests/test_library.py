@@ -6,6 +6,7 @@ from relocarr.config import settings as app_settings
 from relocarr.db import init_db, session
 from relocarr.library import (
     MovieLibraryCache,
+    find_duplicate_groups,
     parse_title_year,
     remove_larger_duplicates,
     run_library_scan_forever,
@@ -168,6 +169,41 @@ async def test_run_library_scan_forever_records_unreachable_roots(tmp_path, monk
     await asyncio.wait_for(task, timeout=2)
 
     assert cache.unreachable_roots == [str(tmp_path / "offline-shield")]
+
+
+def _file(name, size_gb, app_id=1):
+    return {"name": name, "path": f"/t/{name}", "app_id": app_id, "app_name": "Radarr", "size_bytes": int(size_gb * 1024**3)}
+
+
+def test_find_duplicate_groups_groups_by_title_and_year():
+    files = [
+        _file("Example Feature (1982).mkv", 4),
+        _file("Example Feature.1982.mp4", 1),
+        _file("Unrelated Movie.2020.mkv", 2),
+    ]
+
+    groups = find_duplicate_groups(files)
+
+    assert len(groups) == 1
+    assert {f["name"] for f in groups[0]} == {"Example Feature (1982).mkv", "Example Feature.1982.mp4"}
+
+
+def test_find_duplicate_groups_sorts_largest_first():
+    files = [_file("Example Feature.1982.mp4", 1), _file("Example Feature (1982).mkv", 4)]
+
+    groups = find_duplicate_groups(files)
+
+    assert [f["name"] for f in groups[0]] == ["Example Feature (1982).mkv", "Example Feature.1982.mp4"]
+
+
+def test_find_duplicate_groups_ignores_a_singleton_title():
+    files = [_file("Only Copy.2015.mkv", 2)]
+    assert find_duplicate_groups(files) == []
+
+
+def test_find_duplicate_groups_ignores_unparseable_filenames():
+    files = [_file("no-year-here.mkv", 2), _file("also-no-year.mkv", 2)]
+    assert find_duplicate_groups(files) == []
 
 
 def test_remove_larger_duplicates_removes_an_older_oversized_sibling(tmp_path):

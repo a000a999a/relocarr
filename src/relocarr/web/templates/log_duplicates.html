@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block nav_log %}active{% endblock %}
+{% block content %}
+<h1>Duplicate movies in the library</h1>
+
+<p style="margin: 0 0 16px; color: var(--text-dim); font-size: 13px; max-width: 760px;">
+  Every group below is two or more files sharing the same title and year sitting in the library
+  right now -- the same set Plex's own "Duplicates" library filter would show you. Pick exactly
+  which copy (or copies) to delete; nothing here happens automatically. A file Radarr still
+  actively tracks is removed through Radarr's own API so its database stays consistent; anything
+  else is deleted straight from disk.
+</p>
+
+{% if error %}
+<div class="card" style="margin-bottom: 16px; border-color: var(--btn-danger);">
+  <p style="margin: 0; color: var(--btn-danger); font-size: 13px;">{{ error }}</p>
+</div>
+{% endif %}
+{% if result %}
+<div class="card" style="margin-bottom: 16px;">
+  <p style="margin: 0; color: #81c995; font-size: 13px;">{{ result }}</p>
+</div>
+{% endif %}
+
+{% if duplicate_groups %}
+<form id="duplicates-form" method="post" action="/log/duplicates/delete" style="margin: 0 0 16px;">
+  <button type="submit" style="font-size: 13px; background: var(--btn-danger);">Delete checked files</button>
+  <span style="color: var(--text-dim); font-size: 11px; margin-left: 8px;">check the files below you want to remove, then submit -- nothing is deleted if nothing's checked</span>
+</form>
+
+{% for group in duplicate_groups %}
+<div class="card" style="margin-bottom: 16px; padding: 12px;">
+  <table>
+    <tr><th><input type="checkbox" class="select-all" title="select all"></th><th></th><th>App</th><th>File</th><th>Size</th><th>Created</th></tr>
+    {% for f in group %}
+    <tr>
+      <td><input type="checkbox" name="paths" value="{{ f.app_id }}|{{ f.path }}" form="duplicates-form"></td>
+      <td>
+        {% if f.movie_match and f.movie_match.poster_url %}
+        <img src="{{ f.movie_match.poster_url }}" alt="" loading="lazy" style="width: 36px; height: 54px; object-fit: cover; border-radius: 2px; display: block;">
+        {% endif %}
+      </td>
+      <td>{{ f.app_name }}</td>
+      <td style="font-size: 12px;">{{ f.name }}</td>
+      <td>{{ (f.size_bytes / (1024**3)) | round(2) }} GB</td>
+      <td style="font-size: 12px; white-space: nowrap;">{{ f.mtime_str }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endfor %}
+{% else %}
+<div class="card empty-state">No duplicate titles found in the library right now.</div>
+{% endif %}
+{% endblock %}

@@ -697,3 +697,84 @@ def test_redownload_bulk_with_nothing_checked_does_nothing(client):
     resp = client.post("/log/redownload-bulk", data={})
     assert resp.status_code == 200
     assert "No files were checked" in resp.text
+
+
+def test_duplicates_page_groups_files_sharing_title_and_year(client):
+    app_id = _insert_app("radarr", "/t")
+    movie_library_cache.files = [
+        _file(app_id, "Example Feature (1982).mkv", 4),
+        _file(app_id, "Example Feature.1982.mp4", 1),
+        _file(app_id, "Only Copy.2015.mkv", 2),
+    ]
+
+    resp = client.get("/log/duplicates")
+    assert resp.status_code == 200
+    assert "Example Feature (1982).mkv" in resp.text
+    assert "Example Feature.1982.mp4" in resp.text
+    assert "Only Copy.2015.mkv" not in resp.text  # not a duplicate -- excluded
+
+
+def test_duplicates_page_empty_state_when_nothing_duplicated(client):
+    app_id = _insert_app("radarr", "/t")
+    movie_library_cache.files = [_file(app_id, "Only Copy.2015.mkv", 2)]
+
+    resp = client.get("/log/duplicates")
+    assert resp.status_code == 200
+    assert "No duplicate titles found in the library right now." in resp.text
+
+
+@respx.mock
+def test_duplicates_delete_removes_a_radarr_tracked_file_through_the_api(client, tmp_path):
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-dup1")
+    kept_path = str(tmp_path / "Example Feature.1982.mp4")
+    (tmp_path / "Example Feature.1982.mp4").write_bytes(b"x")
+
+    respx.get("http://radarr-dup1/api/v3/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 7,
+                    "title": "Example Feature",
+                    "year": 1982,
+                    "qualityProfileId": 1,
+                    "monitored": True,
+                    "movieFile": {"id": 101, "path": kept_path},
+                }
+            ],
+        )
+    )
+    delete_route = respx.delete("http://radarr-dup1/api/v3/moviefile/101").mock(
+        return_value=httpx.Response(200)
+    )
+
+    resp = client.post(
+        "/log/duplicates/delete", data={"paths": [f"{app_id}|{kept_path}"]}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert delete_route.called
+    # Deleted through Radarr's API, not a direct unlink -- the mocked
+    # delete never touches the real filesystem, so the file surviving
+    # confirms the API branch was taken, not the orphan branch.
+    assert (tmp_path / "Example Feature.1982.mp4").exists()
+
+
+@respx.mock
+def test_duplicates_delete_removes_an_orphan_file_directly(client, tmp_path):
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-dup2")
+    orphan_path = tmp_path / "Example Feature (1982).mkv"
+    orphan_path.write_bytes(b"x")
+
+    respx.get("http://radarr-dup2/api/v3/movie").mock(return_value=httpx.Response(200, json=[]))
+
+    resp = client.post(
+        "/log/duplicates/delete", data={"paths": [f"{app_id}|{orphan_path}"]}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert not orphan_path.exists()
+
+
+def test_duplicates_delete_with_nothing_checked_deletes_nothing(client):
+    resp = client.post("/log/duplicates/delete", data={}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert "error=" in resp.headers["location"]

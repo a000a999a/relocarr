@@ -22,6 +22,7 @@ from ..config import settings
 from ..db import session
 from ..disk_health import cache as disk_space_cache
 from ..library import cache as movie_library_cache
+from ..library import find_duplicate_groups
 from ..library import parse_title_year
 from ..version_check import cache as version_check_cache
 from ..version_check import is_newer
@@ -996,6 +997,112 @@ def log_redownload_bulk(
         result += f" {skipped} skipped"
         result += " (Radarr unreachable for some) -- see the server log." if had_connection_error else "."
     return RedirectResponse(_log_redirect_url(min_gb, max_gb, result=result), status_code=303)
+
+
+def _duplicates_redirect_url(*, error: str | None = None, result: str | None = None) -> str:
+    params = []
+    if error:
+        params.append(f"error={quote(error)}")
+    if result:
+        params.append(f"result={quote(result)}")
+    return "/log/duplicates" + ("?" + "&".join(params) if params else "")
+
+
+@router.get("/log/duplicates")
+def log_duplicates(request: Request, error: str | None = None, result: str | None = None):
+    """Library page "Review & delete duplicates" tool -- the same
+    (title, year) grouping Plex's own "Duplicates" library filter uses
+    (confirmed live, 2026-10-25, against a real Plex library), but
+    actionable here: lets the reviewer pick exactly which copy of each
+    duplicate to delete, rather than relying on the automatic cleanup
+    (library.py's remove_larger_duplicates, run from jobs/machine.py's
+    advance_clean) which only ever fires right after a NEW file lands and
+    only ever removes something strictly larger than it -- it never
+    revisits duplicates already sitting in the library on its own, and
+    never lets a human override its larger-only rule.
+    """
+    with session(settings.db_path) as conn:
+        apps = conn.execute("SELECT * FROM apps").fetchall()
+
+    duplicate_groups = find_duplicate_groups(movie_library_cache.files)
+    all_files = [f for group in duplicate_groups for f in group]
+    if all_files:
+        _enrich_with_radarr_matches(apps, all_files)
+        for f in all_files:
+            mtime = f.get("mtime")
+            f["mtime_str"] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d") if mtime else None
+
+    return templates.TemplateResponse(
+        request,
+        "log_duplicates.html",
+        {"duplicate_groups": duplicate_groups, "error": error, "result": result},
+    )
+
+
+@router.post("/log/duplicates/delete")
+def log_duplicates_delete(paths: list[str] = Form(default=[])):
+    """Bulk-deletes the files checked on /log/duplicates. Each `paths`
+    value is "<app_id>|<path>", same convention as this page's bulk
+    redownload checkboxes. A file Radarr currently tracks as that movie's
+    active file is deleted through Radarr's own API (so Radarr's database
+    stays consistent -- it'll correctly show the movie as missing a file
+    afterward, rather than silently pointing at a file that's actually
+    gone); anything else (an older file Radarr never tracked, or no
+    longer tracks because it was redownloaded under a different id) is
+    deleted directly from disk.
+    """
+    if not paths:
+        return RedirectResponse(
+            _duplicates_redirect_url(error="Nothing was checked -- nothing deleted."), status_code=303
+        )
+
+    with session(settings.db_path) as conn:
+        apps_by_id = {
+            a["id"]: a for a in conn.execute("SELECT * FROM apps WHERE kind = 'radarr'").fetchall()
+        }
+
+    by_app: dict[int, list[str]] = {}
+    for raw in paths:
+        app_id_str, _, path = raw.partition("|")
+        try:
+            by_app.setdefault(int(app_id_str), []).append(path)
+        except ValueError:
+            continue
+
+    deleted = 0
+    failed = 0
+    for app_id, file_paths in by_app.items():
+        app = apps_by_id.get(app_id)
+        by_path: dict = {}
+        client = None
+        if app is not None:
+            client = arr.RadarrApp(app["base_url"], app["api_key"])
+            try:
+                by_path, _ = client.build_movie_index()
+            except httpx.HTTPError:
+                logger.exception("could not reach Radarr app %r for duplicate cleanup", app_id)
+        try:
+            for path in file_paths:
+                match = by_path.get(path)
+                try:
+                    if match is not None and client is not None:
+                        client.delete_file(str(match.movie_file_id))
+                    else:
+                        p = Path(path)
+                        if p.is_file():
+                            p.unlink()
+                    deleted += 1
+                except (OSError, httpx.HTTPError):
+                    logger.exception("could not delete duplicate %r", path)
+                    failed += 1
+        finally:
+            if client is not None:
+                client.close()
+
+    result = f"Deleted {deleted} file{'s' if deleted != 1 else ''}."
+    if failed:
+        result += f" {failed} failed -- see the server log."
+    return RedirectResponse(_duplicates_redirect_url(result=result), status_code=303)
 
 
 @router.post("/jobs/{job_id}/retry")
