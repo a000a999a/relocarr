@@ -257,6 +257,39 @@ def test_sidebar_badge_shows_error_for_unreachable_disk(client):
     assert 'class="nav-badge error"' in resp.text
 
 
+def test_add_app_page_prompts_to_connect_plex_when_not_configured(client):
+    resp = client.get("/settings/apps/new")
+    assert resp.status_code == 200
+    assert "Connect Plex" in resp.text
+    assert "Connected." not in resp.text
+
+
+def test_add_app_page_shows_plex_connected_status(client):
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE settings SET value = 'http://plex:32400' WHERE key = 'plex_base_url'")
+        conn.execute("UPDATE settings SET value = 'tok' WHERE key = 'plex_token'")
+
+    resp = client.get("/settings/apps/new")
+    assert resp.status_code == 200
+    assert "Connected." in resp.text
+
+
+def test_app_config_page_prompts_to_connect_plex_when_not_configured(client):
+    resp = client.get("/settings/apps")
+    assert resp.status_code == 200
+    assert "+ Connect Plex" in resp.text
+
+
+def test_app_config_page_shows_plex_connected_status(client):
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE settings SET value = 'http://plex:32400' WHERE key = 'plex_base_url'")
+        conn.execute("UPDATE settings SET value = 'tok' WHERE key = 'plex_token'")
+
+    resp = client.get("/settings/apps")
+    assert resp.status_code == 200
+    assert "Connected." in resp.text
+
+
 def test_plex_settings_page_renders_with_defaults(client):
     resp = client.get("/settings/plex")
     assert resp.status_code == 200

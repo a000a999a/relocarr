@@ -22,4 +22,17 @@
 
   <button type="submit">Test &amp; Add</button>
 </form>
+
+<div class="card" style="margin-top: 28px; max-width: 420px;">
+  <h1 style="font-size: 14px; margin: 0 0 8px;">Also connect Plex? (optional)</h1>
+  <p style="color: var(--text-dim); font-size: 12px; margin: 0 0 12px;">
+    Not a transfer destination like Radarr/Sonarr -- just lets the Library page's duplicate
+    review show each file's real resolution, codec, and bitrate instead of size alone.
+  </p>
+  {% if plex_status.configured %}
+  <p style="margin: 0; font-size: 13px;"><span style="color: #81c995;">&#10003; Connected.</span> <a href="/settings/plex" style="color: var(--accent);">Edit</a></p>
+  {% else %}
+  <a href="/settings/plex" style="color: var(--accent); font-size: 13px;">Connect Plex &rarr;</a>
+  {% endif %}
+</div>
 {% endblock %}

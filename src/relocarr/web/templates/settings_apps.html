@@ -23,4 +23,14 @@
   No apps configured yet. <a href="/settings/apps/new" style="color: var(--accent);">Add a Radarr or Sonarr instance</a> to get started.
 </div>
 {% endif %}
+
+<div class="card" style="margin-top: 16px; max-width: 480px;">
+  <h1 style="font-size: 14px; margin: 0 0 8px;">Plex</h1>
+  {% if plex_status.configured %}
+  <p style="margin: 0; font-size: 13px;"><span style="color: #81c995;">&#10003; Connected.</span> <a href="/settings/plex" style="color: var(--accent);">Edit</a></p>
+  {% else %}
+  <p style="margin: 0 0 8px; color: var(--text-dim); font-size: 13px;">Not connected -- optional, only used for duplicate quality info on the Library page.</p>
+  <a href="/settings/plex" style="color: var(--accent); font-size: 13px;">+ Connect Plex</a>
+  {% endif %}
+</div>
 {% endblock %}

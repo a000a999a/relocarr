@@ -164,16 +164,39 @@ def settings_root():
     return RedirectResponse("/settings/apps", status_code=307)
 
 
+def _plex_status() -> dict:
+    """Plex isn't a transfer destination -- it has none of the staging/
+    target/layout/download-client concepts the `apps` table and its
+    Radarr/Sonarr-specific routes (webhook dispatch, Preflight, every
+    `arr.make_app(app["kind"], ...)` call) are built around, so it's kept
+    out of that table entirely rather than shoehorned in as a third
+    `kind` that half the app's queries would need to special-case around.
+    Surfaced instead as a status card on the Add App and App Config
+    pages, backed by the same plain settings-table storage
+    /settings/plex already uses.
+    """
+    with session(settings.db_path) as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM settings WHERE key IN ('plex_base_url', 'plex_token')"
+        ).fetchall()
+    values = {r["key"]: r["value"] for r in rows}
+    return {"configured": bool(values.get("plex_base_url") and values.get("plex_token"))}
+
+
 @router.get("/settings/apps")
 def app_config_list(request: Request):
     with session(settings.db_path) as conn:
         apps = conn.execute("SELECT * FROM apps ORDER BY name").fetchall()
-    return templates.TemplateResponse(request, "settings_apps.html", {"apps": apps})
+    return templates.TemplateResponse(
+        request, "settings_apps.html", {"apps": apps, "plex_status": _plex_status()}
+    )
 
 
 @router.get("/settings/apps/new")
 def apps_new_form(request: Request):
-    return templates.TemplateResponse(request, "apps_new.html", {"error": None, "values": {}})
+    return templates.TemplateResponse(
+        request, "apps_new.html", {"error": None, "values": {}, "plex_status": _plex_status()}
+    )
 
 
 @router.post("/settings/apps/new")
@@ -191,7 +214,7 @@ def apps_new_submit(
         return templates.TemplateResponse(
             request,
             "apps_new.html",
-            {"error": f"Connection failed: {result.error}", "values": values},
+            {"error": f"Connection failed: {result.error}", "values": values, "plex_status": _plex_status()},
         )
 
     root_folders = client.list_root_folders()
