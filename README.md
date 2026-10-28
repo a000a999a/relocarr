@@ -13,7 +13,7 @@ Relocarr End to End
 See [PLAN.md](PLAN.md) for the full design and the rationale behind it.
 
 
-**Status: v1.1.1 — stable, running real production traffic since v0.1.0.** Every core piece
+**Status: v1.1.2 — stable, running real production traffic since v0.1.0.** Every core piece
 (webhook receiver, job state machine, removal gate, download-client watcher, scheduler, Preflight
 page, Docker image) plus the Redownload, Queue, and Library-page tooling built since the initial
 release (PLAN.md §19) is implemented, tested, and has handled real imports end to end — see

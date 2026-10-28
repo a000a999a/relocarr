@@ -3,7 +3,7 @@ import pytest
 from relocarr.arr.base import QueueEntry
 from relocarr.clients.base import Torrent
 from relocarr.db import init_db, session
-from relocarr.jobs.scheduler import _poll_interval, run_app_tick
+from relocarr.jobs.scheduler import _poll_interval, run_app_seal_tick, run_app_tick
 
 from .fakes import FakeArrApp, FakeDownloadClient
 
@@ -40,12 +40,49 @@ def _state(db_path, job_id):
         return conn.execute("SELECT state FROM jobs WHERE id = ?", (job_id,)).fetchone()["state"]
 
 
-def test_run_app_tick_seals_then_advances_jobs_in_one_call(db_path, tmp_path):
+def test_run_app_seal_tick_seals_a_completed_tracked_torrent(db_path, tmp_path):
+    # Split out 2026-10-28 from a combined seal+copy test, after a real
+    # incident: once rsync copies started being throttled (--bwlimit, the
+    # Shield-OOM fix), a backlog of large files could keep run_app_tick
+    # (job processing) blocked for minutes, during which a completely
+    # different, already-completed torrent sat seeding -- unsealed --
+    # because sealing used to only run as the first step of that same
+    # call. Sealing now runs via its own function, on its own loop
+    # (run_seal_forever), independent of job processing entirely.
     app = _insert_app(db_path)
 
-    # A completed, *arr-tracked torrent whose file is already in staging
-    # (as if the *arr had imported it moments ago) and a job already
-    # created for it by the webhook receiver.
+    arr_client = FakeArrApp(queue=[QueueEntry("hash1", "downloading", "ok")])
+    download_client = FakeDownloadClient(
+        torrents=[Torrent(id=9, name="Movie", hash="hash1", percent_done=1.0, status=6, download_dir="/d")]
+    )
+
+    with session(db_path) as conn:
+        run_app_seal_tick(conn, app, arr_client=arr_client, download_client=download_client)
+
+    assert download_client.stopped == [9]
+    with session(db_path) as conn:
+        sealed_row = conn.execute(
+            "SELECT 1 FROM downloads WHERE app_id = ? AND download_id = 'HASH1' COLLATE NOCASE", (app["id"],)
+        ).fetchone()
+    assert sealed_row is not None
+
+
+def test_run_app_seal_tick_does_nothing_with_no_download_client(db_path):
+    app = _insert_app(db_path)
+    arr_client = FakeArrApp(queue=[QueueEntry("hash1", "downloading", "ok")])
+
+    with session(db_path) as conn:
+        run_app_seal_tick(conn, app, arr_client=arr_client, download_client=None)
+    # No exception is the assertion here -- there's nothing else to check
+    # with no download client to have stopped anything on.
+
+
+def test_run_app_tick_advances_jobs_without_sealing(db_path, tmp_path):
+    # The other half of the split above: run_app_tick (job processing)
+    # must advance a job fully on its own, and must NOT also seal --
+    # that's run_app_seal_tick's job now, on its own independent loop.
+    app = _insert_app(db_path)
+
     source = tmp_path / "staging" / "Movie2024" / "movie.mkv"
     source.parent.mkdir(parents=True)
     source.write_bytes(b"data")
@@ -58,11 +95,9 @@ def test_run_app_tick_seals_then_advances_jobs_in_one_call(db_path, tmp_path):
             (app["id"], str(source), str(target), source.stat().st_size),
         )
 
-    # Queue has a matching entry -- required for the SEAL step to touch this
-    # torrent at all (Section 4 point 6). That same snapshot is then also
-    # what the removal gate sees later in this SAME tick, so realistically
-    # the gate must NOT open yet (the entry hasn't gone yet) -- cleanup is
-    # expected on a LATER tick, once the queue has actually cleared.
+    # Queue has a matching entry, and the torrent is already complete --
+    # if run_app_tick still sealed internally, this would get stopped;
+    # the whole point of this test is that it must not.
     arr_client = FakeArrApp(queue=[QueueEntry("hash1", "downloading", "ok")], file_paths={"f1": source})
     download_client = FakeDownloadClient(
         torrents=[Torrent(id=9, name="Movie", hash="hash1", percent_done=1.0, status=6, download_dir="/d")]
@@ -78,18 +113,17 @@ def test_run_app_tick_seals_then_advances_jobs_in_one_call(db_path, tmp_path):
             verify_mode="size",
         )
 
-    # Sealed (phase A) ...
-    assert download_client.stopped == [9]
+    assert download_client.stopped == []  # run_app_tick never seals
     with session(db_path) as conn:
         sealed_row = conn.execute(
             "SELECT 1 FROM downloads WHERE app_id = ? AND download_id = 'HASH1' COLLATE NOCASE", (app["id"],)
         ).fetchone()
-    assert sealed_row is not None
+    assert sealed_row is None
 
-    # ... and in the same tick, run_once also ran and advanced the job all
-    # the way through to RECONCILED (copy + verify + arr delete/unmonitor),
-    # but the removal gate correctly withheld cleanup since the queue still
-    # shows this download as present.
+    # The job still advances all the way through to RECONCILED (copy +
+    # verify + arr delete/unmonitor) via the removal gate inside run_once
+    # -- but withholds cleanup since the queue still shows this download
+    # present.
     with session(db_path) as conn:
         job_state = conn.execute("SELECT state FROM jobs WHERE app_id = ?", (app["id"],)).fetchone()["state"]
     assert job_state == "RECONCILED"

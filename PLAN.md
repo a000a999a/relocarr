@@ -821,7 +821,27 @@ downloads so hardlinks work), destination on the network share.
   need a manual stop in Transmission if desired. Version bumped 1.1.0 -> 1.1.1. 3 new tests
   (single-page unchanged, real multi-page pagination, infinite-loop safety on a malformed
   totalRecords), 323 passing.
-
+* **Item 13 -- sealing (stopping a completed torrent) could be blocked for minutes by a
+  throttled copy backlog.** RESOLVED 2026-10-28, same day, found live right after item 12's
+  fix deployed: a different torrent finished and sat seeding for 2+ minutes despite its hash
+  being correctly seen in Radarr's queue (item 12's pagination fix working as intended).
+  Root cause: `seal_completed_downloads` used to run as the first step of the SAME synchronous
+  tick as job processing (`run_once`, which advances every eligible job's full copy+verify
+  inline, one `subprocess.run()` rsync call per job, strictly sequential by design). Once
+  copies started being throttled (`--bwlimit=10M`, item 5's fix), a backlog of even 2-3 large
+  files could keep that one tick blocked for 5-10+ minutes, during which sealing for any
+  newly-completed torrent couldn't run again until the whole backlog finished. Fixed: sealing
+  now runs on its own independent background loop (`run_seal_forever`/`_seal_tick` in
+  `jobs/scheduler.py`), decoupled entirely from job processing (`run_forever`/`_tick`, now
+  copy-only via `run_app_tick`). Both loops share the same configured poll interval but run
+  concurrently -- confirmed safe (not a repeat of the Shield-OOM risk): everything either loop
+  does is a lightweight Radarr/Sonarr/Transmission API call or its own sqlite3 connection,
+  never a second simultaneous large file write, which is the actual thing the single-copy-at-
+  a-time design exists to prevent. Verified live: a torrent completed while a different job's
+  throttled copy was 32 seconds into an active rsync, the independent seal loop stopped it
+  within the next ~15s poll regardless, confirmed via Transmission (`status: 0`) and the
+  `downloads` table. Version bumped 1.1.1 -> 1.1.2. 2 new/updated tests (seal-only, and
+  job-processing-without-sealing), 325 passing.
 ## 19. Post-v0.1 feature additions (2026-10-24/25)
 
 Built in production against the real deployment (§17), not from the roadmap above — each one

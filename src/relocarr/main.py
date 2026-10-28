@@ -10,7 +10,7 @@ from .config import settings
 from .db import init_db
 from .disk_health import cache as disk_space_cache
 from .disk_health import run_disk_space_check_forever
-from .jobs.scheduler import run_forever
+from .jobs.scheduler import run_forever, run_seal_forever
 from .library import cache as movie_library_cache
 from .library import run_library_scan_forever
 from .plex import cache as plex_quality_cache
@@ -80,6 +80,7 @@ async def lifespan(app: FastAPI):
     init_db(settings.db_path)
     stop_event = asyncio.Event()
     scheduler_task = asyncio.create_task(run_forever(settings.db_path, stop_event))
+    seal_task = asyncio.create_task(run_seal_forever(settings.db_path, stop_event))
     library_scan_task = asyncio.create_task(
         run_library_scan_forever(settings.db_path, movie_library_cache, stop_event)
     )
@@ -93,6 +94,7 @@ async def lifespan(app: FastAPI):
     yield
     stop_event.set()
     await scheduler_task
+    await seal_task
     await library_scan_task
     await disk_space_task
     await version_check_task
