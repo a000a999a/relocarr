@@ -23,5 +23,9 @@ class Settings(BaseSettings):
     def db_path(self) -> Path:
         return self.config_dir / "relocarr.db"
 
+    @property
+    def log_path(self) -> Path:
+        return self.config_dir / "logs" / "relocarr.log"
+
 
 settings = Settings()

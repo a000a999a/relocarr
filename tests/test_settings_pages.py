@@ -111,6 +111,13 @@ def test_system_page_renders_with_no_apps(client):
     assert "1.0.0" in resp.text  # version
 
 
+def test_system_page_shows_the_log_file_path(client):
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "relocarr.log" in resp.text
+    assert "7 days kept" in resp.text
+
+
 def test_system_page_shows_no_download_clients_or_plex_by_default(client):
     resp = client.get("/system")
     assert resp.status_code == 200

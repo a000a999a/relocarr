@@ -1964,6 +1964,7 @@ def system_status(request: Request):
             "disk_space": disk_space,
             "version": VERSION,
             "db_path": str(settings.db_path),
+            "log_path": str(settings.log_path),
             "in_docker": Path("/.dockerenv").exists(),
             "uptime_seconds": uptime_seconds,
             "app_count": len(apps),
