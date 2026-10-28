@@ -1331,6 +1331,15 @@ def jobs_cleanup_torrents(request: Request, error: str | None = None, result: st
     still present in Transmission AND backed by a DONE job for the same
     download_id -- i.e. pure leftovers, safe to mass-delete -- without
     touching anything still mid-transfer or still awaited by Radarr/Sonarr.
+
+    "DONE" alone isn't trusted blindly, per the user's original intent
+    (confirmed live, 2026-10-28): a job's state is set once and never
+    revisited, so it only proves the file WAS successfully published at
+    some point in the past, not that it's still there now. Each
+    candidate is cross-checked against the background library scan
+    (movie_library_cache) before being offered -- a DONE job whose
+    target file has since vanished is logged and skipped, never shown as
+    a safe-to-delete duplicate.
     """
     with session(settings.db_path) as conn:
         apps = conn.execute("SELECT * FROM apps").fetchall()
@@ -1342,6 +1351,8 @@ def jobs_cleanup_torrents(request: Request, error: str | None = None, result: st
     done_by_app: dict[int, dict[str, object]] = {}
     for j in done_jobs:
         done_by_app.setdefault(j["app_id"], {})[j["download_id"].lower()] = j
+
+    current_target_paths = {f["path"] for f in movie_library_cache.files}
 
     candidates = []
     for app in apps:
@@ -1365,6 +1376,29 @@ def jobs_cleanup_torrents(request: Request, error: str | None = None, result: st
         for t in torrents:
             job = done.get(t.hash.lower())
             if job is None:
+                continue
+            # Check against the background-refreshed library scan, not a
+            # live stat() here -- confirmed live, 2026-10-28, this was a
+            # real gap: a job's `state` is set once, when the pipeline
+            # finished, and never revisited, so if the published file at
+            # target_path were ever deleted or moved afterward by
+            # anything else, the old DONE row alone would still call this
+            # torrent a safe duplicate -- deleting it then would remove
+            # what might by now be the only copy left anywhere. A live
+            # Path.is_file() here would re-introduce the exact "unprotected
+            # stat() call can hang a page on a wedged mount" bug already
+            # fixed elsewhere (disk_health.py/library.py) -- reusing the
+            # already-safe periodic scan avoids that entirely. Trade-off:
+            # can be up to SCAN_INTERVAL_SECONDS (10 min) stale, same
+            # staleness every other feature reading this cache accepts.
+            if job["target_path"] not in current_target_paths:
+                logger.warning(
+                    "cleanup-torrents: job for %r is DONE but its target file is "
+                    "missing from the last library scan (%r) -- not offering its "
+                    "torrent as a safe duplicate",
+                    t.name,
+                    job["target_path"],
+                )
                 continue
             candidates.append(
                 {
@@ -1825,6 +1859,17 @@ def system_status(request: Request):
         open_jobs = conn.execute(
             "SELECT COUNT(*) AS n FROM jobs WHERE state NOT IN ('DONE', 'SKIPPED')"
         ).fetchone()["n"]
+        # "Apps configured" below only ever counts the `apps` table
+        # (Radarr/Sonarr) -- confirmed live, 2026-10-28, that a user
+        # reasonably read it as covering Transmission/Plex too, since
+        # neither has its own row there (Transmission belongs to an app
+        # as a download_clients row; Plex is a connection, not a transfer
+        # destination, kept entirely out of `apps` -- see _plex_status).
+        # Shown as their own About lines instead of folding them into
+        # that count, so each stays accurate to what it actually means.
+        download_client_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM download_clients"
+        ).fetchone()["n"]
 
     health = []
     if not apps:
@@ -1883,6 +1928,8 @@ def system_status(request: Request):
             "in_docker": Path("/.dockerenv").exists(),
             "uptime_seconds": uptime_seconds,
             "app_count": len(apps),
+            "download_client_count": download_client_count,
+            "plex_status": _plex_status(),
             "open_jobs": open_jobs,
             "library_scan": _library_scan_status(),
             "library_scanned_at": (

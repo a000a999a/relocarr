@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from relocarr.config import settings as app_settings
 from relocarr.db import init_db, session
+from relocarr.library import cache as movie_library_cache
 
 
 @pytest.fixture
@@ -253,6 +254,10 @@ def _torrent_get_response(torrents: list[dict]) -> httpx.Response:
 @respx.mock
 def test_cleanup_torrents_lists_a_torrent_backed_by_a_done_job(client):
     _insert_app_with_client(download_id="ABCDEF123")
+    # The live-verification check (2026-10-28) reads the library scan, not
+    # a direct stat() -- the target file must be in the scan cache for a
+    # candidate to show at all.
+    movie_library_cache.files = [{"path": "/t/a.mkv"}]
     respx.post("http://tx-host:9091/transmission/rpc/").mock(
         return_value=_torrent_get_response(
             [
@@ -274,6 +279,36 @@ def test_cleanup_torrents_lists_a_torrent_backed_by_a_done_job(client):
     resp = client.get("/jobs/cleanup-torrents")
     assert resp.status_code == 200
     assert "Example Movie" in resp.text
+
+
+@respx.mock
+def test_cleanup_torrents_skips_a_done_job_whose_target_file_is_missing(client):
+    # Confirmed live, 2026-10-28: a DONE job's state is set once and never
+    # revisited -- if the published file is ever deleted or moved by
+    # something else afterward, the old DONE row alone must not be enough
+    # to call its torrent a safe duplicate. movie_library_cache left empty
+    # here (default from the autouse reset fixture) simulates the file
+    # being gone from the current library scan.
+    _insert_app_with_client(download_id="ABCDEF123")
+    respx.post("http://tx-host:9091/transmission/rpc/").mock(
+        return_value=_torrent_get_response(
+            [
+                {
+                    "id": 5,
+                    "name": "Example Movie",
+                    "hashString": "abcdef123",
+                    "percentDone": 1.0,
+                    "status": 0,
+                    "downloadDir": "/downloads",
+                }
+            ]
+        )
+    )
+
+    resp = client.get("/jobs/cleanup-torrents")
+    assert resp.status_code == 200
+    assert "Example Movie" not in resp.text
+    assert "No leftover torrents found" in resp.text
 
 
 @respx.mock

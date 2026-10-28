@@ -94,7 +94,28 @@
   <tr><td style="color: var(--text-dim);">Database</td><td>Sqlite -- {{ db_path }}</td></tr>
   <tr><td style="color: var(--text-dim);">Docker</td><td>{{ "Yes" if in_docker else "No" }}</td></tr>
   <tr><td style="color: var(--text-dim);">Uptime</td><td>{{ uptime_seconds // 3600 }}h {{ (uptime_seconds % 3600) // 60 }}m</td></tr>
-  <tr><td style="color: var(--text-dim);">Apps configured</td><td>{{ app_count }}</td></tr>
+  <tr><td style="color: var(--text-dim);">Apps configured</td><td>{{ app_count }} <span style="color: var(--text-dim); font-size: 12px;">(Radarr/Sonarr only)</span></td></tr>
+  <tr>
+    <td style="color: var(--text-dim);">Transmission</td>
+    <td>
+      {% if download_client_count %}
+        {{ download_client_count }} download client{{ "s" if download_client_count != 1 else "" }} configured
+      {% else %}
+        <span style="color: var(--text-dim);">none configured</span>
+      {% endif %}
+    </td>
+  </tr>
+  <tr>
+    <td style="color: var(--text-dim);">Plex</td>
+    <td>
+      {% if plex_status.configured %}
+        <span style="color: #81c995;">Connected</span>
+      {% else %}
+        <span style="color: var(--text-dim);">not connected</span>
+      {% endif %}
+      <a href="/settings/plex" style="color: var(--accent); margin-left: 8px; font-size: 12px;">{{ "edit" if plex_status.configured else "connect" }}</a>
+    </td>
+  </tr>
   <tr><td style="color: var(--text-dim);">Open jobs</td><td><a href="/jobs" style="color: var(--accent);">{{ open_jobs }}</a></td></tr>
 </table>
 {% endblock %}

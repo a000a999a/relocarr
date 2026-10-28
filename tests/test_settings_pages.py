@@ -111,6 +111,36 @@ def test_system_page_renders_with_no_apps(client):
     assert "1.0.0" in resp.text  # version
 
 
+def test_system_page_shows_no_download_clients_or_plex_by_default(client):
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "none configured" in resp.text
+    assert "not connected" in resp.text
+
+
+def test_system_page_shows_download_client_count(client):
+    app_id = _insert_app("/t")
+    with session(app_settings.db_path) as conn:
+        conn.execute(
+            "INSERT INTO download_clients (app_id, kind, host, port) VALUES (?, 'transmission', 'tx', 9091)",
+            (app_id,),
+        )
+
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "1 download client configured" in resp.text
+
+
+def test_system_page_shows_plex_connected(client):
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE settings SET value = 'http://plex:32400' WHERE key = 'plex_base_url'")
+        conn.execute("UPDATE settings SET value = 'tok' WHERE key = 'plex_token'")
+
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "Connected" in resp.text
+
+
 def test_system_page_shows_not_checked_yet_before_the_background_loop_has_run(client):
     resp = client.get("/system")
     assert resp.status_code == 200
