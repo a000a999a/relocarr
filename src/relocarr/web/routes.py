@@ -551,7 +551,19 @@ def settings_plex_submit(
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (key, value),
             )
-    return RedirectResponse("/settings/plex", status_code=303)
+    # Deliberately render here instead of redirecting: a redirect to GET
+    # /settings/plex throws connection_result away entirely (that handler
+    # never re-tests), so the "Connected" card could never actually appear
+    # after a successful Test & Save -- confirmed live, 2026-10-28.
+    return templates.TemplateResponse(
+        request,
+        "settings_plex.html",
+        {
+            "plex_settings": {"plex_base_url": plex_base_url, "plex_token": plex_token},
+            "connection_result": connection_result,
+            "connection_error": None,
+        },
+    )
 
 
 # ----------------------------------------------------------------------

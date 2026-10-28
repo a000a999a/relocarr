@@ -344,7 +344,11 @@ def test_plex_settings_save_tests_the_connection_and_saves_on_success(client):
         data={"plex_base_url": "http://plex:32400", "plex_token": "tok"},
         follow_redirects=False,
     )
-    assert resp.status_code == 303
+    # Rendered directly rather than redirected: a redirect to GET
+    # /settings/plex would throw the connection result away, since that
+    # handler never re-tests the connection itself.
+    assert resp.status_code == 200
+    assert "Connected -- Plex Media Server 1.40.0" in resp.text
 
     with session(app_settings.db_path) as conn:
         rows = {
@@ -371,7 +375,7 @@ def test_plex_settings_save_strips_a_pasted_x_plex_token_prefix(client):
         data={"plex_base_url": "http://plex:32400", "plex_token": "X-Plex-Token=realtoken123"},
         follow_redirects=False,
     )
-    assert resp.status_code == 303
+    assert resp.status_code == 200
     assert route.calls.last.request.headers["X-Plex-Token"] == "realtoken123"
 
     with session(app_settings.db_path) as conn:
