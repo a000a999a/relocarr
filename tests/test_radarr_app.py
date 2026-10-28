@@ -226,6 +226,37 @@ def test_find_smaller_release_picks_the_smallest_non_rejected_candidate():
 
 
 @respx.mock
+def test_find_smaller_release_honors_a_custom_min_reduction_ratio():
+    # Confirmed live, 2026-10-28: a user wanted the "how much smaller"
+    # threshold configurable per app, not the hardcoded module default.
+    client = RadarrApp("http://radarr:7878", "key")
+    current = 4 * 1024**3
+    respx.get("http://radarr:7878/api/v3/release").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                # 90% of current -- fails the default 0.95 ratio too, included for contrast
+                _release("barely-smaller", int(current * 0.90), title="Barely Smaller"),
+                # 60% of current -- fails a strict 0.5 ratio, passes the default
+                _release("moderately-smaller", int(current * 0.60), title="Moderately Smaller"),
+            ],
+        )
+    )
+
+    # Default ratio (0.95): both candidates qualify, smallest wins.
+    default_result = client.find_smaller_release(movie_id=42, current_size_bytes=current)
+    assert default_result.guid == "moderately-smaller"
+
+    # Strict custom ratio (0.5): only something under half the current
+    # size would qualify -- neither candidate does, so nothing is found.
+    strict_result = client.find_smaller_release(
+        movie_id=42, current_size_bytes=current, min_reduction_ratio=0.5
+    )
+    client.close()
+    assert strict_result is None
+
+
+@respx.mock
 def test_find_smaller_release_returns_none_when_nothing_is_meaningfully_smaller():
     client = RadarrApp("http://radarr:7878", "key")
     respx.get("http://radarr:7878/api/v3/release").mock(

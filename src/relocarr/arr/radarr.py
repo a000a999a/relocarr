@@ -240,7 +240,12 @@ class RadarrApp:
         """
         self._update_movie(movie_id, monitored=True)
 
-    def find_smaller_release(self, movie_id: int, current_size_bytes: int) -> Release | None:
+    def find_smaller_release(
+        self,
+        movie_id: int,
+        current_size_bytes: int,
+        min_reduction_ratio: float = MIN_SIZE_REDUCTION_RATIO,
+    ) -> Release | None:
         """Radarr's own interactive search (the same list its manual-search
         UI shows) -- read-only, nothing is grabbed yet. Used instead of
         just triggering an automatic MoviesSearch because Radarr's own
@@ -259,9 +264,14 @@ class RadarrApp:
         is still respected.
 
         Hard requirements (anything failing these is dropped entirely):
-        at least MIN_SIZE_REDUCTION_RATIO smaller than `current_size_bytes`
-        -- the caller must not download "sideways" -- and at least one
+        at least `min_reduction_ratio` smaller than `current_size_bytes` --
+        the caller must not download a release that is not genuinely smaller -- and at least one
         seeder, since a zero-seeder release can never actually finish.
+        `min_reduction_ratio` defaults to the module-level
+        MIN_SIZE_REDUCTION_RATIO but is caller-overridable -- confirmed
+        live, 2026-10-28, a user wanted this configurable per app rather
+        than hardcoded; see routes.py's per-app
+        `min_redownload_reduction_pct` and app_detail.html.
 
         Among what's left, ranked in this order (2026-10-24, matched to
         how the user actually picks manually from Radarr's own search UI):
@@ -289,7 +299,7 @@ class RadarrApp:
             ]
             if disqualifying:
                 continue
-            if r["size"] >= current_size_bytes * MIN_SIZE_REDUCTION_RATIO:
+            if r["size"] >= current_size_bytes * min_reduction_ratio:
                 continue
             if r.get("seeders", 0) <= 0:
                 continue

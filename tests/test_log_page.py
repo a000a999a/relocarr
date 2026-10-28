@@ -31,6 +31,11 @@ def _insert_app(kind: str, target_root: str, base_url: str = "http://x") -> int:
         ).lastrowid
 
 
+def _set_min_redownload_reduction_pct(app_id: int, pct: int) -> None:
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE apps SET min_redownload_reduction_pct = ? WHERE id = ?", (pct, app_id))
+
+
 _job_counter = iter(range(1, 1000))
 
 
@@ -397,6 +402,58 @@ def test_redownload_replace_deletes_and_grabs_a_smaller_release(client, tmp_path
     assert "redownloading Big Movie" in resp.text
     assert "2.00 GB" in resp.text
     assert "was 5.00 GB" in resp.text
+
+
+@respx.mock
+def test_redownload_uses_the_apps_own_configured_reduction_threshold(client, tmp_path):
+    # Confirmed live, 2026-10-28: the "how much smaller" threshold is
+    # configurable per app (App Detail page), not the hardcoded 5%
+    # default -- this is an end-to-end check that the route actually
+    # reads and applies that per-app value, not just the radarr.py client
+    # function in isolation.
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-pct")
+    _set_min_redownload_reduction_pct(app_id, 50)  # strict: must be < 50% of current size
+    current_size = 10 * 1024**3
+
+    respx.get("http://radarr-pct/api/v3/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 42,
+                    "title": "Big Movie",
+                    "year": 2020,
+                    "qualityProfileId": 1,
+                    "monitored": True,
+                    "movieFile": {"id": 99, "path": "/t/Big.mkv"},
+                }
+            ],
+        )
+    )
+    respx.get("http://radarr-pct/api/v3/release").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    # 90% of current -- clears the hardcoded 5% default
+                    # but must be rejected under the app's strict 50%.
+                    "guid": "barely-smaller",
+                    "indexerId": 2,
+                    "size": int(current_size * 0.90),
+                    "title": "Barely Smaller",
+                    "seeders": 50,
+                    "rejections": [],
+                }
+            ],
+        )
+    )
+
+    resp = client.post(
+        "/log/redownload",
+        data={"app_id": app_id, "path": "/t/Big.mkv", "name": "Big.mkv", "size_bytes": current_size, "min_gb": "4"},
+    )
+    assert resp.status_code == 200
+    assert "no release smaller than the current" in resp.text
 
 
 @respx.mock

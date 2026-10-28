@@ -18,6 +18,7 @@ from .. import library
 from .. import plex
 from ..arr.payloads import parse_radarr_webhook, parse_sonarr_webhook
 from ..arr.preflight import evaluate_preflight
+from ..arr.radarr import MIN_SIZE_REDUCTION_RATIO
 from ..clients.transmission import TransmissionClient
 from ..config import settings
 from ..db import session
@@ -312,6 +313,7 @@ def app_detail_submit(
     layout_mode: str = Form("flat"),
     max_file_size_gb: str = Form(""),
     conflict_policy: str = Form("skip"),
+    min_redownload_reduction_pct: str = Form(""),
 ):
     max_file_size_bytes = None
     if max_file_size_gb.strip():
@@ -320,11 +322,25 @@ def app_detail_submit(
         except ValueError:
             pass
 
+    # Blank, non-numeric, or out of a sane 1-99 range -> NULL, which
+    # find_smaller_release treats as "use the built-in default" (see
+    # _min_reduction_ratio) -- never silently saves a value that would
+    # mean "accept anything" (0) or "must be free" (100+).
+    reduction_pct = None
+    if min_redownload_reduction_pct.strip():
+        try:
+            parsed_pct = int(min_redownload_reduction_pct)
+            if 1 <= parsed_pct <= 99:
+                reduction_pct = parsed_pct
+        except ValueError:
+            pass
+
     with session(settings.db_path) as conn:
         conn.execute(
-            """UPDATE apps SET target_root = ?, layout_mode = ?, max_file_size_bytes = ?, conflict_policy = ?
+            """UPDATE apps SET target_root = ?, layout_mode = ?, max_file_size_bytes = ?,
+               conflict_policy = ?, min_redownload_reduction_pct = ?
                WHERE id = ?""",
-            (target_root, layout_mode, max_file_size_bytes, conflict_policy, app_id),
+            (target_root, layout_mode, max_file_size_bytes, conflict_policy, reduction_pct, app_id),
         )
     return RedirectResponse(f"/settings/apps/{app_id}", status_code=303)
 
@@ -881,6 +897,18 @@ def transfer_log(
     )
 
 
+def _min_reduction_ratio(app) -> float:
+    """The app's own `min_redownload_reduction_pct` (Settings -> App
+    Detail, blank = use the built-in default) as the ratio
+    find_smaller_release expects -- confirmed live, 2026-10-28, a user
+    wanted this configurable per app, not a hardcoded constant.
+    """
+    pct = app["min_redownload_reduction_pct"]
+    if pct is None:
+        return MIN_SIZE_REDUCTION_RATIO
+    return 1 - (pct / 100)
+
+
 def _apply_redownload(
     client: arr.RadarrApp,
     root_folder_path: str,
@@ -888,6 +916,7 @@ def _apply_redownload(
     by_path: dict,
     by_title_year: dict,
     quality_profile_id: int | None,
+    min_reduction_ratio: float,
 ) -> str:
     """Classifies one file (see _classify_redownload) and performs the
     matching Radarr action, returning a short human-readable outcome.
@@ -899,6 +928,9 @@ def _apply_redownload(
     RadarrApp.find_smaller_release) -- the whole point of this feature is
     to shrink the library, so finding nothing better is a reason to do
     nothing, not to grab whatever Radarr would've auto-picked.
+    `min_reduction_ratio` comes from the app's own
+    `min_redownload_reduction_pct` (routes calling this compute it), not
+    hardcoded here.
     """
     action, match = _classify_redownload(file, by_path, by_title_year)
     name = file.get("name") or file.get("path", "")
@@ -908,7 +940,7 @@ def _apply_redownload(
     if action == "replace":
         if quality_profile_id is not None:
             client.set_quality_profile(match.movie_id, quality_profile_id)
-        release = client.find_smaller_release(match.movie_id, current_size)
+        release = client.find_smaller_release(match.movie_id, current_size, min_reduction_ratio)
         if release is None:
             raise ValueError(
                 f'"{name}": no release smaller than the current {current_gb:.2f} GB found -- nothing downloaded'
@@ -924,7 +956,7 @@ def _apply_redownload(
         if quality_profile_id is not None:
             client.set_quality_profile(match.movie_id, quality_profile_id)
         client.set_monitored(match.movie_id)
-        release = client.find_smaller_release(match.movie_id, current_size)
+        release = client.find_smaller_release(match.movie_id, current_size, min_reduction_ratio)
         if release is None:
             raise ValueError(
                 f'"{name}": no release smaller than the current {current_gb:.2f} GB found -- nothing downloaded'
@@ -942,7 +974,7 @@ def _apply_redownload(
         added = client.lookup_and_add(title, year, quality_profile_id, root_folder_path, search_for_movie=False)
         if added is None:
             raise ValueError(f'"{name}": no Radarr lookup match for "{title} ({year})"')
-        release = client.find_smaller_release(added.movie_id, current_size)
+        release = client.find_smaller_release(added.movie_id, current_size, min_reduction_ratio)
         if release is None:
             raise ValueError(
                 f'"{name}": added to Radarr, but no release smaller than the current '
@@ -1010,6 +1042,7 @@ def log_redownload(
             by_path,
             by_title_year,
             profile_id,
+            _min_reduction_ratio(app),
         )
     except ValueError as exc:
         return RedirectResponse(_log_redirect_url(min_gb, max_gb, error=str(exc)), status_code=303)
@@ -1082,7 +1115,13 @@ def log_redownload_bulk(
             for f in files:
                 try:
                     outcome = _apply_redownload(
-                        client, app["staging_root"], f, by_path, by_title_year, profile_id
+                        client,
+                        app["staging_root"],
+                        f,
+                        by_path,
+                        by_title_year,
+                        profile_id,
+                        _min_reduction_ratio(app),
                     )
                     logger.info("bulk redownload: %s", outcome)
                     succeeded += 1

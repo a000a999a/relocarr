@@ -95,6 +95,79 @@ def test_update_app_blank_max_size_means_unlimited(client, tmp_path):
     assert app["max_file_size_bytes"] is None
 
 
+def test_app_detail_shows_redownload_threshold_field_for_radarr(client, tmp_path):
+    app_id = _insert_app(str(tmp_path))  # defaults to kind='radarr', see helper below
+    resp = client.get(f"/settings/apps/{app_id}")
+    assert resp.status_code == 200
+    assert "min_redownload_reduction_pct" in resp.text
+
+
+def test_app_detail_hides_redownload_threshold_field_for_sonarr(client, tmp_path):
+    # The Redownload feature itself is Radarr-only -- showing this field
+    # for Sonarr would offer a setting that's never actually used.
+    app_id = _insert_app(str(tmp_path), kind="sonarr")
+    resp = client.get(f"/settings/apps/{app_id}")
+    assert resp.status_code == 200
+    assert "min_redownload_reduction_pct" not in resp.text
+
+
+def test_update_app_persists_redownload_reduction_pct(client, tmp_path):
+    app_id = _insert_app(str(tmp_path))
+    client.post(
+        f"/settings/apps/{app_id}",
+        data={
+            "target_root": "",
+            "layout_mode": "flat",
+            "max_file_size_gb": "",
+            "conflict_policy": "skip",
+            "min_redownload_reduction_pct": "15",
+        },
+    )
+    with session(app_settings.db_path) as conn:
+        app = conn.execute(
+            "SELECT min_redownload_reduction_pct FROM apps WHERE id = ?", (app_id,)
+        ).fetchone()
+    assert app["min_redownload_reduction_pct"] == 15
+
+
+def test_update_app_blank_redownload_reduction_pct_means_default(client, tmp_path):
+    app_id = _insert_app(str(tmp_path))
+    client.post(
+        f"/settings/apps/{app_id}",
+        data={
+            "target_root": "",
+            "layout_mode": "flat",
+            "max_file_size_gb": "",
+            "conflict_policy": "skip",
+            "min_redownload_reduction_pct": "",
+        },
+    )
+    with session(app_settings.db_path) as conn:
+        app = conn.execute(
+            "SELECT min_redownload_reduction_pct FROM apps WHERE id = ?", (app_id,)
+        ).fetchone()
+    assert app["min_redownload_reduction_pct"] is None
+
+
+def test_update_app_rejects_redownload_reduction_pct_out_of_range(client, tmp_path):
+    app_id = _insert_app(str(tmp_path))
+    client.post(
+        f"/settings/apps/{app_id}",
+        data={
+            "target_root": "",
+            "layout_mode": "flat",
+            "max_file_size_gb": "",
+            "conflict_policy": "skip",
+            "min_redownload_reduction_pct": "150",  # out of the sane 1-99 range
+        },
+    )
+    with session(app_settings.db_path) as conn:
+        app = conn.execute(
+            "SELECT min_redownload_reduction_pct FROM apps WHERE id = ?", (app_id,)
+        ).fetchone()
+    assert app["min_redownload_reduction_pct"] is None  # falls back to default, not saved as 150
+
+
 def test_app_detail_shows_download_client_read_only(client, tmp_path):
     # Adding/deleting a download client now only happens on the dedicated
     # /settings/download-clients page (de-duplicated per user feedback,

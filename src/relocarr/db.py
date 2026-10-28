@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS apps (
     layout_mode          TEXT NOT NULL DEFAULT 'flat' CHECK (layout_mode IN ('flat', 'preserve')),
     max_file_size_bytes  INTEGER,                   -- NULL/0 = unlimited; never hardcoded (2026-10-21)
     conflict_policy      TEXT NOT NULL DEFAULT 'skip' CHECK (conflict_policy IN ('skip', 'replace', 'keep_both')),
+    min_redownload_reduction_pct INTEGER,  -- NULL = use RadarrApp's built-in default (5%);
+                                            -- per-app override, never hardcoded (2026-10-28)
     created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -108,10 +110,26 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    """`CREATE TABLE IF NOT EXISTS` is a no-op against a table that already
+    exists -- it does nothing to add a column introduced after a real
+    database (with real rows) is already running. `ALTER TABLE ADD COLUMN`
+    only once, guarded by checking the column's actual presence first
+    (re-running it unguarded raises "duplicate column name" on every
+    subsequent start). A brand-new database already gets the column from
+    SCHEMA's own CREATE TABLE above; this only ever does real work against
+    an existing one that predates it.
+    """
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
 def init_db(db_path: Path) -> None:
     conn = connect(db_path)
     try:
         conn.executescript(SCHEMA)
+        _ensure_column(conn, "apps", "min_redownload_reduction_pct", "min_redownload_reduction_pct INTEGER")
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
