@@ -34,6 +34,10 @@ MIN_SEEDERS_PREFERRED = 10
 # longer budget; everything else stays fast-failing at the normal default.
 RELEASE_SEARCH_TIMEOUT_SECONDS = 60.0
 
+# get_queue()'s own page size, not the default the client omits elsewhere --
+# see get_queue's docstring for why this can't be left unset.
+QUEUE_PAGE_SIZE = 200
+
 
 class RadarrApp:
     """Radarr v3 API client. Endpoints and field names confirmed against a
@@ -77,17 +81,45 @@ class RadarrApp:
         resp.raise_for_status()
 
     def get_queue(self) -> list[QueueEntry]:
-        resp = self._client.get("/api/v3/queue", params={"includeUnknownMovieItems": "true"})
-        resp.raise_for_status()
-        return [
-            QueueEntry(
-                download_id=r["downloadId"],
-                tracked_download_state=r["trackedDownloadState"],
-                tracked_download_status=r["trackedDownloadStatus"],
+        """Confirmed live, 2026-10-28: without `pageSize`, Radarr defaults
+        to 10 -- a real 47-entry queue was silently truncated to its first
+        10 records on every single poll, so any download sitting beyond
+        that page was invisible to `seal_completed_downloads` for its
+        entire time in the queue (not a brief race -- a permanent blind
+        spot that gets worse as the queue grows; this is how 3 real
+        torrents, grabbed 4 days earlier, kept seeding indefinitely despite
+        being actively "downloading" in Radarr's queue that whole time).
+        Pages through `totalRecords` rather than trusting a single large
+        `pageSize` to always be big enough -- the same class of unverified
+        assumption that caused this bug in the first place.
+        """
+        entries: list[QueueEntry] = []
+        page = 1
+        fetched = 0
+        total: int | None = None
+        while total is None or fetched < total:
+            resp = self._client.get(
+                "/api/v3/queue",
+                params={"includeUnknownMovieItems": "true", "page": page, "pageSize": QUEUE_PAGE_SIZE},
             )
-            for r in resp.json()["records"]
-            if "downloadId" in r
-        ]
+            resp.raise_for_status()
+            data = resp.json()
+            records = data["records"]
+            if not records:
+                break
+            fetched += len(records)
+            total = data.get("totalRecords", fetched)
+            entries.extend(
+                QueueEntry(
+                    download_id=r["downloadId"],
+                    tracked_download_state=r["trackedDownloadState"],
+                    tracked_download_status=r["trackedDownloadStatus"],
+                )
+                for r in records
+                if "downloadId" in r
+            )
+            page += 1
+        return entries
 
     def get_preflight_data(self) -> PreflightData:
         """Section 10's Radarr prerequisite checklist, read from the same

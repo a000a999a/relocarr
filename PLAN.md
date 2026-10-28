@@ -795,6 +795,32 @@ downloads so hardlinks work), destination on the network share.
   `shutil.disk_usage()`/`os.stat()`-type call on the request path (the earlier "known remaining
   gap" note on `_check_target_folder` in routes.py is one already-flagged candidate) before
   trusting a manual button as the recovery path. Not started. (added 2026-10-28)
+* **Item 12 -- Radarr/Sonarr queue fetch silently truncated to 10 records, real
+  torrents never sealed.** RESOLVED 2026-10-28, same day, raised fresh (not pre-recorded).
+  User noticed 3 torrents stuck seeding indefinitely (0 peers, 100% done) and asked whether
+  stopping seeding depends on Radarr by design before any code changed. Confirmed two separate
+  things: (1) the Radarr-queue dependency in `seal_completed_downloads` IS intentional --
+  relocarr deliberately only stops a torrent whose hash has ever appeared in that app's own
+  *arr queue, so it never touches a download it isn't tracking (e.g. someone else's torrent on
+  a shared Transmission instance) -- and sealing already runs before the copy pipeline every
+  tick, so the ordering was already correct. (2) the real bug: `RadarrApp.get_queue()` /
+  `SonarrApp.get_queue()` called `/api/v3/queue` with no `pageSize` -- confirmed live, Radarr
+  defaults to `pageSize: 10` when it's omitted, and the real queue had 47 entries, so only the
+  first 10 were ever visible to relocarr, every single poll, since this code existed. Any
+  download sitting beyond that page could never be recorded in `seen_downloads` and could never
+  be sealed -- not a brief race (the known one `seen_downloads` was already built for), a
+  permanent blind spot that gets worse as the queue grows. The 3 stuck torrents were grabbed by
+  Radarr 4 days earlier and sat in the 47-deep queue the whole time, invisible to every poll.
+  Fixed: both `get_queue()` methods now page through `totalRecords` instead of trusting a
+  single request/page size to always be enough -- confirmed live, relocarr's own `get_queue()`
+  now returns the full 47 entries, not 10. **Known limitation, not fixable after the fact:**
+  the 3 torrents that caused this report had already been imported and dropped out of Radarr's
+  live queue entirely by the time the fix deployed -- confirmed live, their hashes are no
+  longer in the queue at all -- so they can never be seen/sealed by relocarr even post-fix; the
+  fix only prevents this for any download still actively in the queue at poll time. Those 3
+  need a manual stop in Transmission if desired. Version bumped 1.1.0 -> 1.1.1. 3 new tests
+  (single-page unchanged, real multi-page pagination, infinite-loop safety on a malformed
+  totalRecords), 323 passing.
 
 ## 19. Post-v0.1 feature additions (2026-10-24/25)
 

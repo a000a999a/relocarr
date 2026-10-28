@@ -108,7 +108,7 @@ def test_system_page_renders_with_no_apps(client):
     resp = client.get("/system")
     assert resp.status_code == 200
     assert "No apps configured yet." in resp.text
-    assert "1.1.0" in resp.text  # version
+    assert "1.1.1" in resp.text  # version
 
 
 def test_system_page_shows_the_log_file_path(client):

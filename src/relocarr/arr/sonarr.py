@@ -11,6 +11,10 @@ from .base import (
     RootFolder,
 )
 
+# get_queue()'s own page size -- see get_queue's docstring, and
+# arr/radarr.py's identical constant/fix, for why this can't be left unset.
+QUEUE_PAGE_SIZE = 200
+
 
 class SonarrApp:
     """Sonarr v3 API client. Same endpoint shapes as Radarr for the calls
@@ -56,17 +60,37 @@ class SonarrApp:
         resp.raise_for_status()
 
     def get_queue(self) -> list[QueueEntry]:
-        resp = self._client.get("/api/v3/queue", params={"includeUnknownSeriesItems": "true"})
-        resp.raise_for_status()
-        return [
-            QueueEntry(
-                download_id=r["downloadId"],
-                tracked_download_state=r["trackedDownloadState"],
-                tracked_download_status=r["trackedDownloadStatus"],
+        """See arr/radarr.py's `RadarrApp.get_queue` docstring -- same bug,
+        same fix: without `pageSize`, Sonarr also defaults to 10, which
+        silently truncates any real queue larger than that on every poll.
+        """
+        entries: list[QueueEntry] = []
+        page = 1
+        fetched = 0
+        total: int | None = None
+        while total is None or fetched < total:
+            resp = self._client.get(
+                "/api/v3/queue",
+                params={"includeUnknownSeriesItems": "true", "page": page, "pageSize": QUEUE_PAGE_SIZE},
             )
-            for r in resp.json()["records"]
-            if "downloadId" in r
-        ]
+            resp.raise_for_status()
+            data = resp.json()
+            records = data["records"]
+            if not records:
+                break
+            fetched += len(records)
+            total = data.get("totalRecords", fetched)
+            entries.extend(
+                QueueEntry(
+                    download_id=r["downloadId"],
+                    tracked_download_state=r["trackedDownloadState"],
+                    tracked_download_status=r["trackedDownloadStatus"],
+                )
+                for r in records
+                if "downloadId" in r
+            )
+            page += 1
+        return entries
 
     def get_preflight_data(self) -> PreflightData:
         """Section 10's Sonarr prerequisite checklist. Field names confirmed

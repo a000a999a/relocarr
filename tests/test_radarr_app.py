@@ -4,8 +4,8 @@ from unittest.mock import patch
 import httpx
 import respx
 
-from relocarr.arr.base import MovieMatch, QualityProfile, Release
-from relocarr.arr.radarr import RELEASE_SEARCH_TIMEOUT_SECONDS, RadarrApp
+from relocarr.arr.base import MovieMatch, QualityProfile, QueueEntry, Release
+from relocarr.arr.radarr import QUEUE_PAGE_SIZE, RELEASE_SEARCH_TIMEOUT_SECONDS, RadarrApp
 
 
 @respx.mock
@@ -507,3 +507,89 @@ def test_lookup_and_add_returns_none_when_lookup_finds_nothing():
     client.close()
 
     assert result is None
+
+
+@respx.mock
+def test_get_queue_returns_everything_on_a_single_page():
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/queue").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "totalRecords": 2,
+                "records": [
+                    {
+                        "downloadId": "AAA",
+                        "trackedDownloadState": "downloading",
+                        "trackedDownloadStatus": "ok",
+                    },
+                    {
+                        "downloadId": "BBB",
+                        "trackedDownloadState": "downloading",
+                        "trackedDownloadStatus": "ok",
+                    },
+                ],
+            },
+        )
+    )
+
+    entries = client.get_queue()
+    client.close()
+
+    assert entries == [
+        QueueEntry(download_id="AAA", tracked_download_state="downloading", tracked_download_status="ok"),
+        QueueEntry(download_id="BBB", tracked_download_state="downloading", tracked_download_status="ok"),
+    ]
+
+
+@respx.mock
+def test_get_queue_pages_through_a_queue_larger_than_one_page():
+    # Root-caused live, 2026-10-28: without an explicit pageSize, Radarr
+    # defaults to 10 -- a real 47-entry queue was silently truncated to
+    # its first 10 records on every poll, so a download sitting beyond
+    # that page could never be sealed (see watcher.py's
+    # seal_completed_downloads). This proves get_queue now pages through
+    # the whole thing rather than trusting a single request.
+    client = RadarrApp("http://radarr:7878", "key")
+    total = QUEUE_PAGE_SIZE + 5
+    page_1_records = [
+        {"downloadId": f"hash-{i}", "trackedDownloadState": "downloading", "trackedDownloadStatus": "ok"}
+        for i in range(QUEUE_PAGE_SIZE)
+    ]
+    page_2_records = [
+        {"downloadId": f"hash-{i}", "trackedDownloadState": "downloading", "trackedDownloadStatus": "ok"}
+        for i in range(QUEUE_PAGE_SIZE, total)
+    ]
+    route = respx.get("http://radarr:7878/api/v3/queue").mock(
+        side_effect=[
+            httpx.Response(200, json={"totalRecords": total, "records": page_1_records}),
+            httpx.Response(200, json={"totalRecords": total, "records": page_2_records}),
+        ]
+    )
+
+    entries = client.get_queue()
+    client.close()
+
+    assert route.call_count == 2
+    assert len(entries) == total
+    assert {e.download_id for e in entries} == {f"hash-{i}" for i in range(total)}
+    first_call_params = dict(route.calls[0].request.url.params)
+    assert first_call_params["page"] == "1"
+    assert first_call_params["pageSize"] == str(QUEUE_PAGE_SIZE)
+    second_call_params = dict(route.calls[1].request.url.params)
+    assert second_call_params["page"] == "2"
+
+
+@respx.mock
+def test_get_queue_stops_on_an_empty_page_even_if_totalrecords_disagrees():
+    # Defensive: a malformed/stale totalRecords must never cause an
+    # infinite request loop.
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/queue").mock(
+        return_value=httpx.Response(200, json={"totalRecords": 999, "records": []})
+    )
+
+    entries = client.get_queue()
+    client.close()
+
+    assert entries == []
