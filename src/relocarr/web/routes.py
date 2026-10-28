@@ -1233,6 +1233,18 @@ def log_duplicates_delete(paths: list[str] = Form(default=[])):
     gone); anything else (an older file Radarr never tracked, or no
     longer tracks because it was redownloaded under a different id) is
     deleted directly from disk.
+
+    Confirmed live, 2026-10-28: without the cache correction below, a
+    just-deleted file kept showing as a duplicate for up to the next
+    10-minute library-scan/Plex-check cycle on reload -- confusing, since
+    the delete itself genuinely succeeded immediately. relocarr knows
+    exactly which paths it just removed, so it corrects both caches
+    in-place rather than waiting for either background loop, and nudges
+    Plex to start its own scan the same way its "Scan Library Files"
+    button does (doesn't wait for that scan to finish -- Plex's own
+    duplicate list will still lag behind by however long that takes, but
+    at least it's no longer only ever triggered by the user remembering
+    to click it themselves).
     """
     if not paths:
         return RedirectResponse(
@@ -1254,6 +1266,7 @@ def log_duplicates_delete(paths: list[str] = Form(default=[])):
 
     deleted = 0
     failed = 0
+    deleted_paths: list[str] = []
     for app_id, file_paths in by_app.items():
         app = apps_by_id.get(app_id)
         by_path: dict = {}
@@ -1275,12 +1288,43 @@ def log_duplicates_delete(paths: list[str] = Form(default=[])):
                         if p.is_file():
                             p.unlink()
                     deleted += 1
+                    deleted_paths.append(path)
                 except (OSError, httpx.HTTPError):
                     logger.exception("could not delete duplicate %r", path)
                     failed += 1
         finally:
             if client is not None:
                 client.close()
+
+    if deleted_paths:
+        deleted_names = {Path(p).name for p in deleted_paths}
+        movie_library_cache.files = [f for f in movie_library_cache.files if f["path"] not in deleted_paths]
+        for name in deleted_names:
+            plex_quality_cache.index.pop(name, None)
+        plex_quality_cache.duplicate_groups = [
+            [f for f in group if f["name"] not in deleted_names]
+            for group in plex_quality_cache.duplicate_groups
+        ]
+        plex_quality_cache.duplicate_groups = [
+            group for group in plex_quality_cache.duplicate_groups if len(group) > 1
+        ]
+
+        with session(settings.db_path) as conn:
+            plex_rows = {
+                r["key"]: r["value"]
+                for r in conn.execute(
+                    "SELECT key, value FROM settings WHERE key IN ('plex_base_url', 'plex_token')"
+                ).fetchall()
+            }
+        base_url, token = plex_rows.get("plex_base_url"), plex_rows.get("plex_token")
+        if base_url and token:
+            plex_client = plex.PlexClient(base_url, token)
+            try:
+                plex_client.refresh_movie_sections()
+            except httpx.HTTPError:
+                logger.exception("could not trigger a Plex library refresh after duplicate cleanup")
+            finally:
+                plex_client.close()
 
     result = f"Deleted {deleted} file{'s' if deleted != 1 else ''}."
     if failed:

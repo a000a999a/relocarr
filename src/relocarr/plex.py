@@ -134,6 +134,26 @@ class PlexClient:
                     groups.append(files)
         return groups
 
+    def refresh_movie_sections(self) -> None:
+        """Tells Plex to start a library scan -- the same action as its own
+        "Scan Library Files" button -- without waiting for that scan to
+        finish. Safe to call inline from a request handler, unlike
+        build_quality_index/list_duplicate_groups: those fetch a full
+        library listing back, this is a single quick POST Plex
+        acknowledges immediately and scans in the background on its own
+        side. Confirmed live, 2026-10-28.
+        """
+        sections_resp = self._client.get("/library/sections")
+        sections_resp.raise_for_status()
+        movie_section_keys = [
+            d["key"]
+            for d in sections_resp.json().get("MediaContainer", {}).get("Directory", [])
+            if d.get("type") == "movie"
+        ]
+        for key in movie_section_keys:
+            resp = self._client.post(f"/library/sections/{key}/refresh")
+            resp.raise_for_status()
+
     def close(self) -> None:
         self._client.close()
 

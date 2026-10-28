@@ -158,6 +158,35 @@ def test_list_duplicate_groups_only_returns_items_with_more_than_one_file():
     ]
 
 
+@respx.mock
+def test_refresh_movie_sections_only_refreshes_movie_sections():
+    client = PlexClient("http://plex:32400", "tok")
+    respx.get("http://plex:32400/library/sections").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "MediaContainer": {
+                    "Directory": [
+                        {"key": "1", "type": "movie", "title": "Movies"},
+                        {"key": "2", "type": "show", "title": "TV Shows"},
+                    ]
+                }
+            },
+        )
+    )
+    refresh_route = respx.post("http://plex:32400/library/sections/1/refresh").mock(
+        return_value=httpx.Response(200)
+    )
+
+    client.refresh_movie_sections()
+    client.close()
+
+    assert refresh_route.called
+    assert "http://plex:32400/library/sections/2/refresh" not in [
+        str(c.request.url) for c in respx.calls
+    ]
+
+
 @pytest.mark.asyncio
 async def test_run_plex_quality_check_forever_does_nothing_when_unconfigured(tmp_path):
     db_path = tmp_path / "relocarr.db"

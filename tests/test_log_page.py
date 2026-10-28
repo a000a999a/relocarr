@@ -922,3 +922,93 @@ def test_duplicates_delete_with_nothing_checked_deletes_nothing(client):
     resp = client.post("/log/duplicates/delete", data={}, follow_redirects=False)
     assert resp.status_code == 303
     assert "error=" in resp.headers["location"]
+
+
+@respx.mock
+def test_duplicates_delete_removes_the_file_from_the_library_cache_immediately(client, tmp_path):
+    # Confirmed live, 2026-10-28: without this, a just-deleted duplicate
+    # kept showing on reload for up to the next 10-minute library-scan
+    # cycle -- confusing, since the delete itself had already succeeded.
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-dup3")
+    orphan_path = tmp_path / "Example Feature (1982).mkv"
+    orphan_path.write_bytes(b"x")
+    kept_path = str(tmp_path / "Example Feature.1982.mp4")
+    movie_library_cache.files = [
+        _file(app_id, "Example Feature (1982).mkv", 2, path=str(orphan_path)),
+        _file(app_id, "Example Feature.1982.mp4", 1, path=kept_path),
+    ]
+
+    respx.get("http://radarr-dup3/api/v3/movie").mock(return_value=httpx.Response(200, json=[]))
+
+    client.post(
+        "/log/duplicates/delete", data={"paths": [f"{app_id}|{orphan_path}"]}, follow_redirects=False
+    )
+
+    assert [f["path"] for f in movie_library_cache.files] == [kept_path]
+
+
+@respx.mock
+def test_duplicates_delete_removes_the_file_from_the_plex_cache_immediately(client, tmp_path):
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-dup4")
+    orphan_path = tmp_path / "Example Feature (1982).mkv"
+    orphan_path.write_bytes(b"x")
+    plex_quality_cache.checked_at = time.time()
+    plex_quality_cache.index = {"Example Feature (1982).mkv": {"resolution": "1080"}}
+    plex_quality_cache.duplicate_groups = [
+        [
+            {"name": "Example Feature (1982).mkv", "size_bytes": int(2 * 1024**3)},
+            {"name": "Example Feature.1982.mp4", "size_bytes": int(1 * 1024**3)},
+        ]
+    ]
+
+    respx.get("http://radarr-dup4/api/v3/movie").mock(return_value=httpx.Response(200, json=[]))
+
+    client.post(
+        "/log/duplicates/delete", data={"paths": [f"{app_id}|{orphan_path}"]}, follow_redirects=False
+    )
+
+    assert "Example Feature (1982).mkv" not in plex_quality_cache.index
+    # The group dropped to a single remaining file -- no longer a duplicate.
+    assert plex_quality_cache.duplicate_groups == []
+
+
+@respx.mock
+def test_duplicates_delete_triggers_a_plex_library_refresh_when_plex_is_configured(client, tmp_path):
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-dup5")
+    orphan_path = tmp_path / "Example Feature (1982).mkv"
+    orphan_path.write_bytes(b"x")
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE settings SET value = 'http://plex-dup' WHERE key = 'plex_base_url'")
+        conn.execute("UPDATE settings SET value = 'tok' WHERE key = 'plex_token'")
+
+    respx.get("http://radarr-dup5/api/v3/movie").mock(return_value=httpx.Response(200, json=[]))
+    respx.get("http://plex-dup/library/sections").mock(
+        return_value=httpx.Response(
+            200, json={"MediaContainer": {"Directory": [{"key": "1", "type": "movie"}]}}
+        )
+    )
+    refresh_route = respx.post("http://plex-dup/library/sections/1/refresh").mock(
+        return_value=httpx.Response(200)
+    )
+
+    client.post(
+        "/log/duplicates/delete", data={"paths": [f"{app_id}|{orphan_path}"]}, follow_redirects=False
+    )
+
+    assert refresh_route.called
+
+
+@respx.mock
+def test_duplicates_delete_does_not_attempt_a_plex_refresh_when_plex_is_not_configured(client, tmp_path):
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-dup6")
+    orphan_path = tmp_path / "Example Feature (1982).mkv"
+    orphan_path.write_bytes(b"x")
+
+    respx.get("http://radarr-dup6/api/v3/movie").mock(return_value=httpx.Response(200, json=[]))
+
+    resp = client.post(
+        "/log/duplicates/delete", data={"paths": [f"{app_id}|{orphan_path}"]}, follow_redirects=False
+    )
+
+    assert resp.status_code == 303
+    assert not orphan_path.exists()
