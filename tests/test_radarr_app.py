@@ -117,6 +117,39 @@ def test_build_movie_index_extracts_poster_url_preferring_tmdbs_remote_url():
 
 
 @respx.mock
+def test_get_last_download_id_returns_the_most_recent_grabs_hash():
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/history/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"eventType": "grabbed", "downloadId": "OLDER", "date": "2026-10-20T00:00:00Z"},
+                {"eventType": "grabbed", "downloadId": "NEWEST", "date": "2026-10-24T19:50:06Z"},
+                {"eventType": "downloadFolderImported", "date": "2026-10-24T20:32:43Z"},
+            ],
+        )
+    )
+
+    result = client.get_last_download_id(movie_id=149)
+    client.close()
+
+    assert result == "NEWEST"
+
+
+@respx.mock
+def test_get_last_download_id_returns_none_without_any_grab_history():
+    client = RadarrApp("http://radarr:7878", "key")
+    respx.get("http://radarr:7878/api/v3/history/movie").mock(
+        return_value=httpx.Response(200, json=[{"eventType": "downloadFolderImported", "date": "2026-10-24T20:32:43Z"}])
+    )
+
+    result = client.get_last_download_id(movie_id=149)
+    client.close()
+
+    assert result is None
+
+
+@respx.mock
 def test_find_movie_by_file_path_returns_none_when_unmatched():
     client = RadarrApp("http://radarr:7878", "key")
     respx.get("http://radarr:7878/api/v3/movie").mock(return_value=httpx.Response(200, json=[]))

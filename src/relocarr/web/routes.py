@@ -1707,13 +1707,16 @@ def jobs_reconcile_missing(request: Request, error: str | None = None, result: s
     covered by a job -- matched by media_file_id, the *arr's own moviefile
     id, the same identifier the webhook handler keys jobs on. Creating a
     job for one here is otherwise identical to what the webhook would have
-    done: same target path computation, same oversized-file guard. The one
-    difference is download_id is always left NULL, the same as any other
-    manually-imported file (PLAN.md Section 5) -- there's no reliable way
-    to recover which torrent originally produced a file from Radarr's
-    movie API alone, so these skip the removal gate's torrent cleanup
-    entirely and rely on /jobs/cleanup-torrents or /jobs/cleanup-source as
-    the fallback if a torrent is still sitting around for one of them.
+    done: same target path computation, same oversized-file guard,
+    download_id recovered from the movie's own grab history where
+    possible (RadarrApp.get_last_download_id -- confirmed live, 2026-10-28,
+    without this a backfilled job's torrent could never be found by
+    /jobs/cleanup-torrents, which correlates by hash, so its leftover
+    torrent would sit in Transmission forever even after a fully
+    successful transfer). Falls back to NULL only when the movie genuinely
+    has no grab history (a pure manual import, same as any other
+    manually-imported file, PLAN.md Section 5) -- those still rely on
+    /jobs/cleanup-source as the fallback instead.
     """
     with session(settings.db_path) as conn:
         apps = conn.execute("SELECT * FROM apps WHERE kind = 'radarr'").fetchall()
@@ -1809,62 +1812,82 @@ def jobs_reconcile_missing_create(candidates: list[str] = Form(default=[])):
             continue
         client = arr.RadarrApp(app["base_url"], app["api_key"])
         try:
-            movies_by_id = {m["id"]: m for m in client.list_movies()}
-        except httpx.HTTPError:
-            logger.exception("could not reach Radarr app %r to create reconciled jobs", app_id)
-            skipped += len(keys)
-            continue
+            try:
+                movies_by_id = {m["id"]: m for m in client.list_movies()}
+            except httpx.HTTPError:
+                logger.exception("could not reach Radarr app %r to create reconciled jobs", app_id)
+                skipped += len(keys)
+                continue
+
+            for key in keys:
+                movie_id_str, _, file_id = key.partition("|")
+                try:
+                    movie_id = int(movie_id_str)
+                except ValueError:
+                    skipped += 1
+                    continue
+                movie = movies_by_id.get(movie_id)
+                movie_file = movie.get("movieFile") if movie else None
+                if movie_file is None or str(movie_file["id"]) != file_id:
+                    skipped += 1  # file changed or vanished since the list was shown
+                    continue
+                try:
+                    target_path = compute_target_path(
+                        source_path=movie_file["path"],
+                        staging_root=app["staging_root"],
+                        target_root=app["target_root"],
+                        mode=app["layout_mode"],
+                    )
+                except (ValueError, OSError):
+                    skipped += 1
+                    continue
+
+                max_size = app["max_file_size_bytes"]
+                if max_size and movie_file["size"] > max_size:
+                    initial_state = "NEEDS_ATTENTION"
+                    error = f"file size {movie_file['size']} exceeds configured max {max_size}"
+                else:
+                    initial_state = "IMPORTED"
+                    error = None
+
+                # Confirmed live, 2026-10-28: Radarr's own history exposes
+                # the originating torrent's hash on its `grabbed` event
+                # (downloadId), a reliable way to recover it instead of
+                # always leaving download_id NULL -- without it, a
+                # backfilled job's torrent can never be found by
+                # /jobs/cleanup-torrents (it correlates by hash) and sits
+                # in Transmission forever even after a fully successful
+                # transfer. None (no grab history at all -- a genuinely
+                # manual import) is still a correct, expected outcome.
+                try:
+                    download_id = client.get_last_download_id(movie_id)
+                except httpx.HTTPError:
+                    logger.exception(
+                        "could not look up download history for movie %r -- leaving download_id NULL",
+                        movie_id,
+                    )
+                    download_id = None
+
+                with session(settings.db_path) as conn:
+                    cursor = conn.execute(
+                        """INSERT OR IGNORE INTO jobs
+                           (app_id, download_id, media_file_id, unmonitor_id, source_path, target_path, size_bytes, state, error)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            app_id,
+                            download_id,
+                            file_id,
+                            movie_id,
+                            movie_file["path"],
+                            str(target_path),
+                            movie_file["size"],
+                            initial_state,
+                            error,
+                        ),
+                    )
+                created += cursor.rowcount
         finally:
             client.close()
-
-        for key in keys:
-            movie_id_str, _, file_id = key.partition("|")
-            try:
-                movie_id = int(movie_id_str)
-            except ValueError:
-                skipped += 1
-                continue
-            movie = movies_by_id.get(movie_id)
-            movie_file = movie.get("movieFile") if movie else None
-            if movie_file is None or str(movie_file["id"]) != file_id:
-                skipped += 1  # file changed or vanished since the list was shown
-                continue
-            try:
-                target_path = compute_target_path(
-                    source_path=movie_file["path"],
-                    staging_root=app["staging_root"],
-                    target_root=app["target_root"],
-                    mode=app["layout_mode"],
-                )
-            except (ValueError, OSError):
-                skipped += 1
-                continue
-
-            max_size = app["max_file_size_bytes"]
-            if max_size and movie_file["size"] > max_size:
-                initial_state = "NEEDS_ATTENTION"
-                error = f"file size {movie_file['size']} exceeds configured max {max_size}"
-            else:
-                initial_state = "IMPORTED"
-                error = None
-
-            with session(settings.db_path) as conn:
-                cursor = conn.execute(
-                    """INSERT OR IGNORE INTO jobs
-                       (app_id, download_id, media_file_id, unmonitor_id, source_path, target_path, size_bytes, state, error)
-                       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        app_id,
-                        file_id,
-                        movie_id,
-                        movie_file["path"],
-                        str(target_path),
-                        movie_file["size"],
-                        initial_state,
-                        error,
-                    ),
-                )
-            created += cursor.rowcount
 
     result = f"Created {created} job{'s' if created != 1 else ''} -- the normal pipeline will pick them up within one poll interval."
     if skipped:

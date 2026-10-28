@@ -603,6 +603,9 @@ def test_reconcile_create_creates_an_imported_job(client, tmp_path):
             ],
         )
     )
+    # No grab history -- a genuinely manual import, download_id correctly
+    # stays NULL (see the dedicated test below for the history-found case).
+    respx.get("http://radarr-recon3/api/v3/history/movie").mock(return_value=httpx.Response(200, json=[]))
 
     resp = client.post(
         "/jobs/reconcile-missing/create", data={"candidates": [f"{app_id}|10|55"]}, follow_redirects=False
@@ -648,6 +651,7 @@ def test_reconcile_create_respects_max_file_size(client, tmp_path):
             ],
         )
     )
+    respx.get("http://radarr-recon4/api/v3/history/movie").mock(return_value=httpx.Response(200, json=[]))
 
     client.post(
         "/jobs/reconcile-missing/create", data={"candidates": [f"{app_id}|10|55"]}, follow_redirects=False
@@ -695,6 +699,95 @@ def test_reconcile_create_skips_a_file_that_changed_since_listing(client, tmp_pa
             "SELECT * FROM jobs WHERE app_id = ? AND media_file_id = '55'", (app_id,)
         ).fetchone()
     assert job is None  # stale candidate -- correctly skipped, not created
+
+
+@respx.mock
+def test_reconcile_create_recovers_download_id_from_radarr_history(client, tmp_path):
+    # Confirmed live, 2026-10-28: without this, a backfilled job's torrent
+    # could never be found by /jobs/cleanup-torrents (it correlates by
+    # hash), so a fully-transferred movie's leftover torrent would sit in
+    # Transmission forever. Two real movies hit exactly this.
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    movie_file = staging / "Movie.mkv"
+    movie_file.write_bytes(b"x" * 2000)
+
+    app_id = _insert_radarr_app_with_paths(str(staging), str(target), base_url="http://radarr-recon6")
+    respx.get("http://radarr-recon6/api/v3/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 10,
+                    "title": "Movie",
+                    "year": 2020,
+                    "movieFile": {"id": 55, "path": str(movie_file), "size": 2000},
+                }
+            ],
+        )
+    )
+    respx.get("http://radarr-recon6/api/v3/history/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "eventType": "grabbed",
+                    "downloadId": "ABCDEF123",
+                    "date": "2026-10-24T19:50:06Z",
+                }
+            ],
+        )
+    )
+
+    client.post(
+        "/jobs/reconcile-missing/create", data={"candidates": [f"{app_id}|10|55"]}, follow_redirects=False
+    )
+
+    with session(app_settings.db_path) as conn:
+        job = conn.execute(
+            "SELECT * FROM jobs WHERE app_id = ? AND media_file_id = '55'", (app_id,)
+        ).fetchone()
+    assert job["download_id"] == "ABCDEF123"
+
+
+@respx.mock
+def test_reconcile_create_still_creates_the_job_when_history_lookup_fails(client, tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    movie_file = staging / "Movie.mkv"
+    movie_file.write_bytes(b"x" * 2000)
+
+    app_id = _insert_radarr_app_with_paths(str(staging), str(target), base_url="http://radarr-recon7")
+    respx.get("http://radarr-recon7/api/v3/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 10,
+                    "title": "Movie",
+                    "year": 2020,
+                    "movieFile": {"id": 55, "path": str(movie_file), "size": 2000},
+                }
+            ],
+        )
+    )
+    respx.get("http://radarr-recon7/api/v3/history/movie").mock(return_value=httpx.Response(500))
+
+    resp = client.post(
+        "/jobs/reconcile-missing/create", data={"candidates": [f"{app_id}|10|55"]}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+
+    with session(app_settings.db_path) as conn:
+        job = conn.execute(
+            "SELECT * FROM jobs WHERE app_id = ? AND media_file_id = '55'", (app_id,)
+        ).fetchone()
+    assert job is not None  # the job is still created, just without a recovered download_id
+    assert job["download_id"] is None
 
 
 def test_reconcile_create_with_nothing_checked_creates_nothing(client):

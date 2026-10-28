@@ -169,6 +169,29 @@ class RadarrApp:
         resp.raise_for_status()
         return resp.json()
 
+    def get_last_download_id(self, movie_id: int) -> str | None:
+        """The torrent hash behind this movie's most recent `grabbed`
+        history event -- confirmed live, 2026-10-28: Radarr exposes this
+        directly as the event's own `downloadId` field, a 100% reliable
+        way to recover which torrent produced a file (used by the
+        reconciliation scan, /jobs/reconcile-missing, so a backfilled job
+        can still correlate back to Transmission instead of always
+        leaving download_id NULL). Returns None if the movie has no grab
+        history at all -- e.g. a pure manual import that never went
+        through Radarr's own search, which genuinely has no torrent to
+        recover.
+        """
+        resp = self._client.get("/api/v3/history/movie", params={"movieId": movie_id})
+        resp.raise_for_status()
+        grabbed = [e for e in resp.json() if e.get("eventType") == "grabbed" and e.get("downloadId")]
+        if not grabbed:
+            return None
+        # history/movie isn't documented as guaranteed-sorted -- sort
+        # explicitly by date rather than trusting response order to pick
+        # the actual most recent grab.
+        grabbed.sort(key=lambda e: e["date"], reverse=True)
+        return grabbed[0]["downloadId"]
+
     def build_movie_index(self) -> tuple[dict[str, MovieMatch], dict[tuple[str, int | None], MovieMatch]]:
         """One GET /api/v3/movie, indexed two ways, to resolve a filesystem
         file back to the right Radarr action without one call per file:
