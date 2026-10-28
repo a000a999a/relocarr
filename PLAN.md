@@ -714,6 +714,14 @@ downloads so hardlinks work), destination on the network share.
 * **Item 8 -- would enabling ADB over Wi-Fi on the Shield's developer settings help diagnose
   items 5/6/7?** Raised as a possible additional diagnostic tool, not yet evaluated or acted
   on. (added 2026-10-28)
+* **Item 9 -- Sonarr redownload support.** The per-app "minimum size reduction" threshold
+  (App Detail page, `min_redownload_reduction_pct`) only does anything for Radarr -- the whole
+  Redownload feature (`_classify_redownload`, `RadarrApp.find_smaller_release`, the grab/delete
+  flow) is Radarr-only; there's no Sonarr equivalent in the codebase at all (matches the
+  existing "Sonarr has zero tracked series by design" note elsewhere in this file). User wants
+  the setting adapted to Sonarr too -- in practice this means building real Sonarr redownload
+  support (episode-level "find a smaller release" logic mirroring Radarr's), not just unhiding
+  a UI field. Meaningfully bigger scope than the Radarr version; not started. (added 2026-10-28)
 
 ## 19. Post-v0.1 feature additions (2026-10-24/25)
 
