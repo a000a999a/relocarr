@@ -127,6 +127,31 @@ def find_duplicate_groups(files: list[dict]) -> list[list[dict]]:
     ]
 
 
+def find_duplicate_groups_from_plex(files: list[dict], plex_groups: list[list[dict]]) -> list[list[dict]]:
+    """Same output shape as find_duplicate_groups, but the grouping itself
+    comes from Plex's own duplicate-matched library listing (plex.py's
+    PlexClient.list_duplicate_groups, a real metadata match) instead of a
+    (title, year) filename regex -- confirmed live, 2026-10-28, a
+    filename-only match missed a real pre-2026 duplicate under an older
+    naming convention entirely, whereas Plex's own match caught it. Each
+    Plex group only carries a basename and a size (that's all Plex's API
+    reports); this resolves those back to relocarr's own scanned files
+    (with the full path and app_id this page's review/delete actions
+    need), matched by basename for the same reason plex.py's
+    build_quality_index is -- Plex and relocarr's own CIFS-mount scan
+    report different absolute paths for the same file. A Plex group with
+    a file relocarr's own scan didn't see (nothing currently reachable at
+    that basename) is skipped rather than guessed at.
+    """
+    by_name: dict[str, dict] = {f["name"]: f for f in files}
+    groups: list[list[dict]] = []
+    for plex_group in plex_groups:
+        matched = [by_name[f["name"]] for f in plex_group if f["name"] in by_name]
+        if len(matched) > 1:
+            groups.append(sorted(matched, key=lambda f: f["size_bytes"], reverse=True))
+    return groups
+
+
 def scan_movie_files(apps: list[sqlite3.Row]) -> tuple[list[dict], list[str]]:
     """Walk every configured Radarr target folder and return each movie
     file's name, owning app, and size, plus any target root that wasn't

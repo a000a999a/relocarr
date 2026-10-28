@@ -7,6 +7,7 @@ from relocarr.db import init_db, session
 from relocarr.library import (
     MovieLibraryCache,
     find_duplicate_groups,
+    find_duplicate_groups_from_plex,
     parse_title_year,
     remove_larger_duplicates,
     run_library_scan_forever,
@@ -224,6 +225,59 @@ def test_find_duplicate_groups_does_not_merge_different_years():
     # easily miss, so year stays an exact match.
     files = [_file("Example Feature (2009).mkv", 3), _file("Example Feature.2010.mkv", 2)]
     assert find_duplicate_groups(files) == []
+
+
+def test_find_duplicate_groups_from_plex_resolves_plex_basenames_against_scanned_files():
+    files = [
+        _file("Example Feature (1982).mkv", 4),
+        _file("Example Feature.1982.mp4", 1),
+        _file("Unrelated Movie.2020.mkv", 2),
+    ]
+    plex_groups = [
+        [
+            {"name": "Example Feature (1982).mkv", "size_bytes": int(4 * 1024**3)},
+            {"name": "Example Feature.1982.mp4", "size_bytes": int(1 * 1024**3)},
+        ]
+    ]
+
+    groups = find_duplicate_groups_from_plex(files, plex_groups)
+
+    assert len(groups) == 1
+    assert [f["name"] for f in groups[0]] == ["Example Feature (1982).mkv", "Example Feature.1982.mp4"]
+
+
+def test_find_duplicate_groups_from_plex_catches_a_pair_the_filename_regex_would_miss():
+    # The whole point of using Plex's own match: two differently-shaped
+    # names for the same movie that a (title, year) filename regex
+    # wouldn't necessarily group together on its own.
+    files = [_file("Example Reissue (2001).mp4", 2), _file("Example Reissue.2001.mp4", 2)]
+    plex_groups = [
+        [
+            {"name": "Example Reissue (2001).mp4", "size_bytes": int(2 * 1024**3)},
+            {"name": "Example Reissue.2001.mp4", "size_bytes": int(2 * 1024**3)},
+        ]
+    ]
+
+    groups = find_duplicate_groups_from_plex(files, plex_groups)
+
+    assert len(groups) == 1
+    assert {f["name"] for f in groups[0]} == {"Example Reissue (2001).mp4", "Example Reissue.2001.mp4"}
+
+
+def test_find_duplicate_groups_from_plex_skips_a_file_relocarr_never_scanned():
+    files = [_file("Example Feature (1982).mkv", 4)]
+    plex_groups = [
+        [
+            {"name": "Example Feature (1982).mkv", "size_bytes": int(4 * 1024**3)},
+            {"name": "Example Feature.1982.mp4", "size_bytes": int(1 * 1024**3)},
+        ]
+    ]
+
+    assert find_duplicate_groups_from_plex(files, plex_groups) == []
+
+
+def test_find_duplicate_groups_from_plex_ignores_empty_input():
+    assert find_duplicate_groups_from_plex([], []) == []
 
 
 def test_remove_larger_duplicates_removes_an_older_oversized_sibling(tmp_path):

@@ -96,6 +96,44 @@ class PlexClient:
                             index[PurePosixPath(path).name] = quality
         return index
 
+    def list_duplicate_groups(self) -> list[list[dict]]:
+        """Each returned group is one movie Plex's own metadata agent has
+        matched more than one file to, straight from Plex's `duplicate=1`
+        library filter -- the exact same source its web UI's "Duplicates"
+        view uses -- rather than relocarr re-deriving "which files are the
+        same movie" itself from filenames. Confirmed live, 2026-10-28:
+        this catches cases a (title, year) filename regex gets wrong or
+        misses outright -- e.g. two different naming conventions for the
+        same release, or a file whose name carries the wrong year --
+        because it's matched by Plex's real metadata lookup, not a
+        pattern over the filename. One GET /library/sections plus one GET
+        /library/sections/{id}/all?duplicate=1 per movie-type section.
+        """
+        sections_resp = self._client.get("/library/sections")
+        sections_resp.raise_for_status()
+        movie_section_keys = [
+            d["key"]
+            for d in sections_resp.json().get("MediaContainer", {}).get("Directory", [])
+            if d.get("type") == "movie"
+        ]
+
+        groups: list[list[dict]] = []
+        for key in movie_section_keys:
+            resp = self._client.get(f"/library/sections/{key}/all", params={"duplicate": 1})
+            resp.raise_for_status()
+            for item in resp.json().get("MediaContainer", {}).get("Metadata", []):
+                files = []
+                for media in item.get("Media", []):
+                    for part in media.get("Part", []):
+                        path = part.get("file")
+                        if path:
+                            files.append(
+                                {"name": PurePosixPath(path).name, "size_bytes": part.get("size") or 0}
+                            )
+                if len(files) > 1:
+                    groups.append(files)
+        return groups
+
     def close(self) -> None:
         self._client.close()
 
@@ -104,11 +142,15 @@ class PlexQualityCache:
     """Mirrors disk_health.py/library.py/version_check.py: a live Plex API
     call (here, potentially a large library listing) has no business
     running inside a web request. Read-only for every web request; only
-    the background loop below ever calls Plex.
+    the background loop below ever calls Plex. Holds Plex's duplicate
+    groups alongside the quality index -- both come from the same
+    per-cycle Plex check, there's no reason to run two separate loops
+    against the same server.
     """
 
     def __init__(self) -> None:
         self.index: dict[str, dict] = {}
+        self.duplicate_groups: list[list[dict]] = []
         self.checked_at: float | None = None
         self.error: str | None = None
 
@@ -116,7 +158,7 @@ class PlexQualityCache:
 cache = PlexQualityCache()
 
 
-def _check(db_path: Path) -> dict[str, dict] | None:
+def _check(db_path: Path) -> tuple[dict[str, dict], list[list[dict]]] | None:
     """Returns None (not an error) when Plex isn't configured yet at all --
     distinct from a configured-but-failing connection, which sets
     cache.error instead of silently leaving the index empty.
@@ -137,7 +179,7 @@ def _check(db_path: Path) -> dict[str, dict] | None:
 
     client = PlexClient(base_url, token)
     try:
-        return client.build_quality_index()
+        return client.build_quality_index(), client.list_duplicate_groups()
     finally:
         client.close()
 
@@ -147,9 +189,9 @@ async def run_plex_quality_check_forever(
 ) -> None:
     while not stop_event.is_set():
         try:
-            index = await asyncio.wait_for(asyncio.to_thread(_check, db_path), timeout=CHECK_TIMEOUT_SECONDS)
-            if index is not None:
-                cache.index = index
+            result = await asyncio.wait_for(asyncio.to_thread(_check, db_path), timeout=CHECK_TIMEOUT_SECONDS)
+            if result is not None:
+                cache.index, cache.duplicate_groups = result
                 cache.checked_at = time.time()
                 cache.error = None
         except TimeoutError:

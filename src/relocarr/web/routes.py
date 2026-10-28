@@ -25,6 +25,7 @@ from ..db import session
 from ..disk_health import cache as disk_space_cache
 from ..library import cache as movie_library_cache
 from ..library import find_duplicate_groups
+from ..library import find_duplicate_groups_from_plex
 from ..library import parse_title_year
 from ..plex import cache as plex_quality_cache
 from ..transfer.layout import compute_target_path
@@ -1165,21 +1166,34 @@ def _duplicates_redirect_url(*, error: str | None = None, result: str | None = N
 
 @router.get("/log/duplicates")
 def log_duplicates(request: Request, error: str | None = None, result: str | None = None):
-    """Library page "Review & delete duplicates" tool -- the same
-    (title, year) grouping Plex's own "Duplicates" library filter uses
-    (confirmed live, 2026-10-25, against a real Plex library), but
-    actionable here: lets the reviewer pick exactly which copy of each
-    duplicate to delete, rather than relying on the automatic cleanup
-    (library.py's remove_larger_duplicates, run from jobs/machine.py's
-    advance_clean) which only ever fires right after a NEW file lands and
-    only ever removes something strictly larger than it -- it never
-    revisits duplicates already sitting in the library on its own, and
-    never lets a human override its larger-only rule.
+    """Library page "Review & delete duplicates" tool -- lets the reviewer
+    pick exactly which copy of each duplicate to delete, rather than
+    relying on the automatic cleanup (library.py's remove_larger_duplicates,
+    run from jobs/machine.py's advance_clean) which only ever fires right
+    after a NEW file lands and only ever removes something strictly larger
+    than it -- it never revisits duplicates already sitting in the library
+    on its own, and never lets a human override its larger-only rule.
+
+    When Plex is configured, which files actually count as duplicates of
+    each other comes straight from Plex's own `duplicate=1` library
+    filter (the same source its web UI's "Duplicates" view uses) instead
+    of relocarr re-deriving that itself from a (title, year) filename
+    regex -- confirmed live, 2026-10-28: the filename-only grouping
+    missed a real duplicate sitting under an older, differently-formatted
+    name (no year-bracket convention, predating relocarr itself), which
+    Plex's real metadata match caught correctly. Falls back to the
+    filename-based grouping only when Plex isn't configured/reachable, so
+    this page still works without it.
     """
     with session(settings.db_path) as conn:
         apps = conn.execute("SELECT * FROM apps").fetchall()
 
-    duplicate_groups = find_duplicate_groups(movie_library_cache.files)
+    if plex_quality_cache.checked_at is not None:
+        duplicate_groups = find_duplicate_groups_from_plex(
+            movie_library_cache.files, plex_quality_cache.duplicate_groups
+        )
+    else:
+        duplicate_groups = find_duplicate_groups(movie_library_cache.files)
     all_files = [f for group in duplicate_groups for f in group]
     if all_files:
         _enrich_with_radarr_matches(apps, all_files)
@@ -1203,6 +1217,7 @@ def log_duplicates(request: Request, error: str | None = None, result: str | Non
             "error": error,
             "result": result,
             "plex_configured": bool(plex_quality_cache.checked_at or plex_quality_cache.index),
+            "grouped_via_plex": plex_quality_cache.checked_at is not None,
         },
     )
 

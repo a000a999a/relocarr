@@ -771,12 +771,64 @@ def test_duplicates_page_shows_plex_quality_when_configured(client):
     plex_quality_cache.index = {
         "Example Feature.1982.mp4": {"resolution": "1080", "codec": "hevc", "bitrate": 8000}
     }
+    # Once Plex is configured, grouping itself comes from Plex's own
+    # duplicate listing, not the filename regex -- this page needs it set
+    # too, or the two files above would never be paired up as a group.
+    plex_quality_cache.duplicate_groups = [
+        [
+            {"name": "Example Feature (1982).mkv", "size_bytes": int(4 * 1024**3)},
+            {"name": "Example Feature.1982.mp4", "size_bytes": int(1 * 1024**3)},
+        ]
+    ]
 
     resp = client.get("/log/duplicates")
     assert resp.status_code == 200
     assert "1080p" in resp.text
     assert "HEVC" in resp.text
     assert "8.0 Mbps" in resp.text
+
+
+def test_duplicates_page_groups_via_plex_when_configured_even_if_filenames_would_not_match(client):
+    # The real bug this guards against, 2026-10-28: two files for the same
+    # movie under different naming conventions -- the (title, year) regex
+    # groups fine here too, but once Plex is configured it should be
+    # Plex's own match driving the grouping, not the regex, and this
+    # proves that by using a Plex group the regex path would also find
+    # (the point is *which* path is actually used, see the next test for
+    # one the regex would miss outright).
+    app_id = _insert_app("radarr", "/t")
+    movie_library_cache.files = [
+        _file(app_id, "Example Reissue (2001).mp4", 2),
+        _file(app_id, "Example Reissue.2001.mp4", 2),
+    ]
+    plex_quality_cache.checked_at = time.time()
+    plex_quality_cache.duplicate_groups = [
+        [
+            {"name": "Example Reissue (2001).mp4", "size_bytes": int(2 * 1024**3)},
+            {"name": "Example Reissue.2001.mp4", "size_bytes": int(2 * 1024**3)},
+        ]
+    ]
+
+    resp = client.get("/log/duplicates")
+    assert resp.status_code == 200
+    assert "Example Reissue (2001).mp4" in resp.text
+    assert "Example Reissue.2001.mp4" in resp.text
+
+
+def test_duplicates_page_falls_back_to_filename_grouping_when_plex_has_not_checked_in_yet(client):
+    app_id = _insert_app("radarr", "/t")
+    movie_library_cache.files = [
+        _file(app_id, "Example Feature (1982).mkv", 4),
+        _file(app_id, "Example Feature.1982.mp4", 1),
+    ]
+    # plex_quality_cache.checked_at left at its reset default (None) --
+    # Plex isn't configured/reachable, so the page must still work from
+    # the filename-based grouping rather than showing nothing.
+
+    resp = client.get("/log/duplicates")
+    assert resp.status_code == 200
+    assert "Example Feature (1982).mkv" in resp.text
+    assert "Example Feature.1982.mp4" in resp.text
 
 
 def test_duplicates_page_hints_to_configure_plex_when_not_set_up(client):

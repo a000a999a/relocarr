@@ -97,6 +97,67 @@ def test_build_quality_index_only_scans_movie_sections():
     ]
 
 
+@respx.mock
+def test_list_duplicate_groups_only_returns_items_with_more_than_one_file():
+    client = PlexClient("http://plex:32400", "tok")
+    respx.get("http://plex:32400/library/sections").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "MediaContainer": {
+                    "Directory": [
+                        {"key": "1", "type": "movie", "title": "Movies"},
+                        {"key": "2", "type": "show", "title": "TV Shows"},
+                    ]
+                }
+            },
+        )
+    )
+    dup_route = respx.get(
+        "http://plex:32400/library/sections/1/all", params={"duplicate": 1}
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "MediaContainer": {
+                    "Metadata": [
+                        {
+                            "title": "Example Feature",
+                            "Media": [
+                                {"Part": [{"file": "/storage/xyz/movies/Example Feature (1982).mkv", "size": 100}]},
+                                {"Part": [{"file": "/storage/xyz/movies/Example Feature.1982.mkv", "size": 200}]},
+                            ],
+                        },
+                        {
+                            # Only one file -- Plex itself doesn't consider this a duplicate,
+                            # confirming list_duplicate_groups trusts Plex's own filter rather
+                            # than re-checking the count itself.
+                            "title": "Solo Movie",
+                            "Media": [
+                                {"Part": [{"file": "/storage/xyz/movies/Solo Movie.1999.mkv", "size": 100}]}
+                            ],
+                        },
+                    ]
+                }
+            },
+        )
+    )
+
+    groups = client.list_duplicate_groups()
+    client.close()
+
+    assert dup_route.called
+    assert groups == [
+        [
+            {"name": "Example Feature (1982).mkv", "size_bytes": 100},
+            {"name": "Example Feature.1982.mkv", "size_bytes": 200},
+        ]
+    ]
+    assert "http://plex:32400/library/sections/2/all" not in [
+        str(c.request.url) for c in respx.calls
+    ]
+
+
 @pytest.mark.asyncio
 async def test_run_plex_quality_check_forever_does_nothing_when_unconfigured(tmp_path):
     db_path = tmp_path / "relocarr.db"
@@ -110,6 +171,7 @@ async def test_run_plex_quality_check_forever_does_nothing_when_unconfigured(tmp
     await asyncio.wait_for(task, timeout=2)
 
     assert cache.index == {}
+    assert cache.duplicate_groups == []
     assert cache.checked_at is None
 
 
@@ -136,5 +198,6 @@ async def test_run_plex_quality_check_forever_populates_the_cache(tmp_path):
     await asyncio.wait_for(task, timeout=2)
 
     assert cache.index == {}
+    assert cache.duplicate_groups == []
     assert cache.checked_at is not None
     assert cache.error is None

@@ -4,14 +4,18 @@
 <h1>Duplicate movies in the library</h1>
 
 <p style="margin: 0 0 16px; color: var(--text-dim); font-size: 13px; max-width: 760px;">
-  Every group below is two or more files sharing the same title and year sitting in the library
-  right now -- the same set Plex's own "Duplicates" library filter would show you. Pick exactly
-  which copy (or copies) to delete; nothing here happens automatically. A file Radarr still
-  actively tracks is removed through Radarr's own API so its database stays consistent; anything
-  else is deleted straight from disk.
-  {% if not plex_configured %}
-  Add a <a href="/settings/plex" style="color: var(--accent);">Plex connection</a> to also see each
-  file's real resolution, codec, and bitrate here -- without one, size is the only signal shown.
+  Every group below is two or more files sitting in the library right now that are the same
+  movie. Pick exactly which copy (or copies) to delete; nothing here happens automatically. A
+  file Radarr still actively tracks is removed through Radarr's own API so its database stays
+  consistent; anything else is deleted straight from disk.
+  {% if grouped_via_plex %}
+  Grouped straight from Plex's own "Duplicates" library filter -- the same matching its own web
+  UI uses, not a filename guess.
+  {% else %}
+  Grouped by filename (title + year) -- without a Plex connection this is a best-effort guess
+  and can miss a real duplicate under an older or differently-formatted name.
+  Add a <a href="/settings/plex" style="color: var(--accent);">Plex connection</a> to group from
+  Plex's own match instead, and to also see each file's real resolution, codec, and bitrate here.
   {% endif %}
 </p>
 
