@@ -27,6 +27,18 @@ from pathlib import Path
 _TRANSIENT_RSYNC_EXIT_CODES = {10, 11, 12, 23, 30}
 _SENDER_SIDE_ERROR_MARKER = "[sender]"
 
+# Root-caused live on the Shield, 2026-10-28: a sustained large-file write
+# arrives faster than the Shield can flush to its (often USB-thumbdrive-backed)
+# storage, so com.nvidia.shield.smbserver's own write buffers pile up in RAM
+# until Android's OOM killer kills smbd outright -- which drops the CIFS mount
+# out from under the in-flight rsync process, wedging it in unkillable D-state
+# (see rsync_copy's docstring) until the mount itself recovers. Throttling the
+# write rate client-side keeps it within what the Shield can actually drain,
+# so the buffer never has a chance to grow unbounded. 10 MiB/s is comfortably
+# above what even a slow USB thumbdrive sustains for writes, while leaving
+# real headroom below whatever rate was triggering the OOM kill.
+_BWLIMIT = "10M"
+
 
 @dataclass
 class CopyResult:
@@ -42,21 +54,45 @@ def rsync_copy(source: Path, dest: Path, *, timeout: float | None = None) -> Cop
     directory and renames atomically on success, which already gives us
     PLAN.md Section 12's ".part then atomic rename" behavior for free.
 
-    `--partial` keeps that temp file on failure/interruption instead of
-    deleting it, so a retry resumes rather than restarting -- the whole
-    reason rsync was chosen over a hand-rolled loop (see PLAN.md Section 12,
-    added after the 13.6 GB Shield wedge incident).
+    `--partial-dir=.rsync-partial` (which implies `--partial`) keeps an
+    interrupted transfer's in-progress bytes under a *stable* name --
+    `.rsync-partial/<dest's own filename>`, relative to dest's own
+    directory -- instead of plain `--partial`'s default of a fresh
+    `.{name}.{random-6-chars}` temp file on every single invocation.
+    Confirmed live, 2026-10-28: without --partial-dir, a job retried after
+    an interrupted transfer never resumed its own prior attempt at all --
+    each retry got a new random suffix and left the previous one behind
+    as a permanent orphan, with nothing ever cleaning them up even once a
+    later attempt succeeded (15 such orphans, ~22.9GB, accumulated on the
+    real Shield before this was caught). With a stable partial-dir name, a
+    retry finds and resumes its own prior attempt, and rsync itself
+    removes the partial-dir entry on successful completion -- no manual
+    cleanup needed on our side.
 
-    Caveat confirmed the hard way during that incident: if the destination
-    mount itself wedges, the underlying `cp`/rsync process can land in
-    uninterruptible (D) kernel sleep -- not even SIGKILL can stop it then,
-    so `timeout` here bounds *reporting*, not necessarily actual process
-    termination. A caller must not assume a timed-out call freed anything.
+    Caveat confirmed the hard way during the 13.6 GB Shield wedge incident
+    that motivated choosing rsync over a hand-rolled loop (PLAN.md Section
+    12): if the destination mount itself wedges, the underlying rsync
+    process can land in uninterruptible (D) kernel sleep -- not even
+    SIGKILL can stop it then, so `timeout` here bounds *reporting*, not
+    necessarily actual process termination. A caller must not assume a
+    timed-out call freed anything.
+
+    `--bwlimit=_BWLIMIT` throttles the write rate to prevent the wedge
+    above from happening in the first place -- see _BWLIMIT's comment for
+    the root cause (an OOM-killed smbd) this addresses.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         proc = subprocess.run(
-            ["rsync", "-a", "--partial", str(source), str(dest)],
+            [
+                "rsync",
+                "-a",
+                "--partial",
+                "--partial-dir=.rsync-partial",
+                f"--bwlimit={_BWLIMIT}",
+                str(source),
+                str(dest),
+            ],
             capture_output=True,
             text=True,
             timeout=timeout,

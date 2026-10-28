@@ -1,6 +1,6 @@
 [project]
 name = "relocarr"
-version = "1.0.0"
+version = "1.0.1"
 description = "Hands finished Radarr/Sonarr imports over to a NAS or custom layout, then cleans up the download client."
 readme = "README.md"
 requires-python = ">=3.12"

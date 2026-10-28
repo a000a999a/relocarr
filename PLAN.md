@@ -700,9 +700,26 @@ downloads so hardlinks work), destination on the network share.
   Radarr's poster. Ship alongside a version bump (1.0.0 -> 1.1.0) and fuller Plex
   documentation. **Explicit instruction: do not start before 2026-10-29, and even then only
   when the user asks -- do not auto-start.** (added 2026-10-25, not investigated yet)
-* **Item 5 -- file transfers destabilizing the Shield.** User reports bugs in the file
-  transfer causing the Nvidia Shield's own service(s) to go down/become unstable. Not yet
-  investigated -- no confirmed root cause. (added 2026-10-28)
+* **Item 5 -- file transfers destabilizing the Shield.** RESOLVED 2026-10-28. Root cause
+  confirmed live via ADB logcat (see item 8): a sustained large-file write (a 3.01GB movie
+  transfer triggered this) arrives at the Shield faster than it can flush to
+  its own storage, piling up `com.nvidia.shield.smbserver`'s write buffers in RAM until
+  Android's OOM killer kills smbd outright (confirmed in logcat, 20:41:00) -- which yanks the
+  CIFS mount out from under relocarr's in-flight rsync process, wedging it in unkillable
+  D-state (ps showed the sender process stuck in D for 34 minutes, 19:33-20:07, matching the
+  exact symptom from the original `cp`/`dd` wedges in PLAN.md §16 -- confirms this was never
+  rsync-specific). Fixed in `transfer/copier.py`: `rsync_copy()` now passes `--bwlimit=10M`,
+  capping the write rate below whatever threshold triggers the OOM kill. Also confirmed live
+  (not assumed) that relocarr's pipeline is already fully sequential -- `scheduler.py`/
+  `worker.py` use plain synchronous `for` loops, `copier.py` calls blocking
+  `subprocess.run()`, no concurrency primitive anywhere in the codebase -- so only one write
+  buffer can ever exist at a time regardless of batch size, which is the other half of why
+  this class of OOM can't recur. Verified live: re-triggered the identical file that wedged
+  earlier -- completed cleanly with zero wedge/`disk_health` warnings over the whole transfer
+  (vs. multiple within 4 minutes previously), landed at the correct byte-for-byte size.
+  Shield-side RAM measurement during the fix's validation: 59MB before the fix (immediately
+  OOM-killed) vs. 1.36GB stable throughout, even under two simultaneous Plex streams running
+  at the same time as the throttled transfer. 312 tests passing.
 * **Item 6 -- half-transferred files left behind after Shield reboots caused by item 5.**
   RESOLVED 2026-10-28. Confirmed hypothesis: `transfer/copier.py`'s `rsync_copy()` uses no
   `--temp-dir`/suffix option, so any interrupted transfer leaves rsync's own default hidden
@@ -717,13 +734,15 @@ downloads so hardlinks work), destination on the network share.
   this one needs a fresh redownload, not a filename fix, and is really part of items 5/7/8
   below rather than a cleanup item. See item 10 for preventing recurrence.
 * **Item 7 -- check whether the new Plex integration itself is contributing to the item 5
-  instability.** User suspects the instability may come from either the file transfer process
-  or the new Plex quality-lookup background check (added 2026-10-25, §19) -- not yet
-  determined which, or whether it's unrelated to both. User has switched Plex off
-  (Settings -> Plex) to isolate the variable and analyze step by step. (added 2026-10-28)
+  instability.** RESOLVED 2026-10-28. Confirmed NOT Plex: root cause was relocarr's own
+  large-write-triggered OOM kill of smbd (item 5), unrelated to Plex's background
+  quality-check loop. Plex's own connection attempts failing (`Connection refused`) during the
+  incident were a downstream symptom of smbd being killed, not a cause. Safe to re-enable Plex
+  (Settings -> Plex) now that item 5's actual fix is deployed.
 * **Item 8 -- would enabling ADB over Wi-Fi on the Shield's developer settings help diagnose
-  items 5/6/7?** Raised as a possible additional diagnostic tool, not yet evaluated or acted
-  on. (added 2026-10-28)
+  items 5/6/7?** RESOLVED 2026-10-28. Yes -- enabled and directly responsible for finding item
+  5's root cause: logcat showed Android's OOM killer killing `com.nvidia.shield.smbserver` at
+  the exact moment of the wedge.
 * **Item 9 -- Sonarr redownload support.** The per-app "minimum size reduction" threshold
   (App Detail page, `min_redownload_reduction_pct`) only does anything for Radarr -- the whole
   Redownload feature (`_classify_redownload`, `RadarrApp.find_smaller_release`, the grab/delete
@@ -733,15 +752,38 @@ downloads so hardlinks work), destination on the network share.
   support (episode-level "find a smaller release" logic mirroring Radarr's), not just unhiding
   a UI field. Meaningfully bigger scope than the Radarr version; not started. (added 2026-10-28)
 * **Item 10 -- stop rsync's interrupted-transfer temp files from being orphaned permanently.**
-  Root cause behind item 6: `rsync_copy()` in `transfer/copier.py` relies on rsync's default
-  temp-file behaviour (hidden dot-prefix + a *freshly random* suffix on every invocation), so
-  a retried transfer never resumes or replaces its own previous attempt's temp file -- it just
-  leaves another one behind under a different random name. Nothing currently cleans these up
-  even after a later attempt succeeds. Fix should give each job a *stable* temp name (e.g.
-  rsync's `--partial-dir`, or a fixed `--suffix`/temp path keyed off the job id) so a retry
-  reuses/overwrites its own leftover instead of multiplying them, plus a safety cleanup pass
-  that removes a job's own temp file once that job reaches DONE. Not started. (added
-  2026-10-28)
+  RESOLVED 2026-10-28. Root cause was behind item 6: `rsync_copy()` in `transfer/copier.py`
+  relied on rsync's default temp-file behaviour (hidden dot-prefix + a *freshly random* suffix
+  on every invocation), so a retried transfer never resumed or replaced its own previous
+  attempt's temp file -- it just left another one behind under a different random name, with
+  nothing cleaning these up even after a later attempt succeeded. Fixed via
+  `--partial-dir=.rsync-partial` (implies `--partial`) -- keeps an interrupted transfer's
+  in-progress bytes under a *stable* name (keyed to the destination's own filename) instead of
+  a fresh random suffix per attempt, so a retry finds and resumes its own prior attempt, and
+  rsync itself removes the partial-dir entry on success -- no manual cleanup needed on
+  relocarr's side. 2 new tests confirm the stable name and that a pre-existing partial-dir
+  entry is correctly consumed and removed on success.
+* **Item 11 -- restart recovery: auto self-heal vs. manual UI button.** User asked about
+  adding a "restart container" button to the System page for when relocarr's background
+  scan/health checks wedge on a dead mount. Compared two approaches (not yet built, not yet
+  decided): (a) automatic self-healing -- extend the existing library-scan loop to detect an
+  unreachable-to-reachable transition and call `os._exit(1)`, relying on the already-configured
+  `restart: unless-stopped` to bring the container back; needs a debounce/cooldown so a flapping
+  mount doesn't restart-loop, and has to account for multiple apps/roots recovering at different
+  times -- more effort, touches shared background-loop code. (b) a manual button -- a single new
+  route + confirm dialog, same `os._exit(1)` exit mechanism, no Docker socket needed since
+  `restart: unless-stopped` already handles the actual restart; much less effort, self-contained.
+  **Open question raised, not yet answered:** whether the web UI itself could ever be unreachable
+  during a wedge, which would make a manual button useless exactly when needed. Current
+  understanding (not fully verified): the System/Library pages already read from background
+  caches (disk_health.py, library.py) rather than calling blocking filesystem calls directly on
+  the request path (see §18 history above, and PLAN.md's disk_health/library-scan entries) -- so
+  the web server itself should stay responsive even when the background scan is stuck. Only a
+  genuinely synchronous blocking FS call made directly inside a request handler (not yet audited
+  for one) would break this. Needs a check across routes.py for any remaining direct
+  `shutil.disk_usage()`/`os.stat()`-type call on the request path (the earlier "known remaining
+  gap" note on `_check_target_folder` in routes.py is one already-flagged candidate) before
+  trusting a manual button as the recovery path. Not started. (added 2026-10-28)
 
 ## 19. Post-v0.1 feature additions (2026-10-24/25)
 
