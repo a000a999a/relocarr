@@ -680,6 +680,40 @@ downloads so hardlinks work), destination on the network share.
   whether the movie file was actually transferred to target, then clean up orphan torrent
   records in Transmission. Needs a fresh look at what the current logic actually checks vs.
   that intent (added 2026-10-25, not investigated yet).
+* **Item 4 -- Plex posters + deep link.** On the Library page's redownload table and the
+  duplicate-review page, switch the poster source to Plex's own artwork (and make it a
+  clickable link to that movie's page in Plex) whenever Plex is configured; when it's not,
+  show a placeholder reading exactly "Plex integration needed" instead of falling back to
+  Radarr's poster. Ship alongside a version bump (1.0.0 -> 1.1.0) and fuller Plex
+  documentation. **Explicit instruction: do not start before 2026-10-29, and even then only
+  when the user asks -- do not auto-start.** (added 2026-10-25, not investigated yet)
+* **Item 5 -- file transfers destabilizing the Shield.** User reports bugs in the file
+  transfer causing the Nvidia Shield's own service(s) to go down/become unstable. Not yet
+  investigated -- no confirmed root cause. (added 2026-10-28)
+* **Item 6 -- half-transferred files left behind after Shield reboots caused by item 5.**
+  Several resumed transfers during the item 5 instability (which required manually rebooting
+  the Shield) left cryptic leftover files in the target folder, shaped like
+  `.Example Movie.2025.mp4.jfZJw6` -- a leading `.` and a random 6-character suffix after the
+  real extension. User supplied a screenshot with several more examples of the same shape
+  (different titles/years, same dot-prefix + 6-char-suffix pattern -- real filenames
+  deliberately not repeated here, see the screenshot in this conversation for the exact
+  originals if needed). Unconfirmed hypothesis, not yet
+  checked against the real rsync invocation in `transfer/copier.py`: this naming shape
+  (hidden dot-prefix + random suffix) looks like rsync's own default temp-file convention
+  for an in-progress transfer, which would normally get renamed to the real filename on
+  success and deleted on a clean failure -- worth checking whether relocarr's rsync call uses
+  a specific `--temp-dir`/suffix option or relies on this default, and whether cleanup after
+  an abnormal interruption (destination crashing mid-transfer) is handled at all. Also worth
+  a cleanup pass on the leftover files themselves once the cause is understood -- don't just
+  delete them blind before confirming they're not something still in use. (added 2026-10-28)
+* **Item 7 -- check whether the new Plex integration itself is contributing to the item 5
+  instability.** User suspects the instability may come from either the file transfer process
+  or the new Plex quality-lookup background check (added 2026-10-25, §19) -- not yet
+  determined which, or whether it's unrelated to both. User has switched Plex off
+  (Settings -> Plex) to isolate the variable and analyze step by step. (added 2026-10-28)
+* **Item 8 -- would enabling ADB over Wi-Fi on the Shield's developer settings help diagnose
+  items 5/6/7?** Raised as a possible additional diagnostic tool, not yet evaluated or acted
+  on. (added 2026-10-28)
 
 ## 19. Post-v0.1 feature additions (2026-10-24/25)
 
