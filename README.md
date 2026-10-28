@@ -13,7 +13,7 @@ Relocarr End to End
 See [PLAN.md](PLAN.md) for the full design and the rationale behind it.
 
 
-**Status: v1.0.1 — stable, running real production traffic since v0.1.0.** Every core piece
+**Status: v1.1.0 — stable, running real production traffic since v0.1.0.** Every core piece
 (webhook receiver, job state machine, removal gate, download-client watcher, scheduler, Preflight
 page, Docker image) plus the Redownload, Queue, and Library-page tooling built since the initial
 release (PLAN.md §19) is implemented, tested, and has handled real imports end to end — see
@@ -98,12 +98,36 @@ pipeline can miss:
 
 Transfer history, a free-space projection, and a size summary of the movie library actually on
 disk (not just relocarr's own job history, which only covers files it personally moved). Clicking
-a size bucket lists every file in that range with its Radarr poster, the date it landed (so you
-can tell a recent redownload from an old file at a glance), and a **Redownload** action — per
-file or in bulk — that only ever grabs a release genuinely smaller than the current one at the
-same quality (ranked by seeders, then resolution; see `arr/radarr.py`'s `find_smaller_release`).
-Nothing downloads if nothing smaller turns up. Once a smaller file lands, any older/larger file
-sharing the same title and year is removed automatically.
+a size bucket lists every file in that range with its poster (from Plex, when configured — see
+below), the date it landed (so you can tell a recent redownload from an old file at a glance),
+and a **Redownload** action — per file or in bulk — that only ever grabs a release genuinely
+smaller than the current one at the same quality (ranked by seeders, then resolution; see
+`arr/radarr.py`'s `find_smaller_release`). Nothing downloads if nothing smaller turns up. Once a
+smaller file lands, any older/larger file sharing the same title and year is removed
+automatically.
+
+### Plex integration
+
+Optional — Settings → Plex, a base URL and an
+[X-Plex-Token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/).
+Once connected, Plex's own metadata (not relocarr's own filename-based guesses) drives three
+things:
+
+- **Posters and deep links.** The Library page's size-bucket file list and the duplicate-review
+  page both show each file's real poster, pulled from Plex and proxied through relocarr's own
+  server (so the Plex token never ends up in page source) — clicking it opens that movie's page
+  in Plex Web. Without Plex configured, these slots show a "Plex integration needed" placeholder
+  instead of silently falling back to a different poster source.
+- **Real quality info.** Duplicate rows on `/log/duplicates` show the actual resolution/codec/
+  bitrate Plex sees for each file, instead of relying on filename and size alone.
+- **Duplicate grouping.** `/log/duplicates` groups by Plex's own `duplicate=1` library filter —
+  the same source its own "Duplicates" view uses — rather than a (title, year) filename regex,
+  which catches cases like two different naming conventions for the same release that a regex
+  can miss or get wrong.
+
+A background check (10-minute interval, same cadence as the library scan) keeps this cached —
+never a live Plex call inside a page request — so a slow or unreachable Plex server can't hang
+any page, only leave the cached data stale until the next cycle.
 
 ## Security
 

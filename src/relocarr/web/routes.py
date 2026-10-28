@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Form, Header, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from .. import VERSION, arr
@@ -567,6 +567,44 @@ def settings_plex_submit(
     )
 
 
+@router.get("/plex/poster/{rating_key}")
+def plex_poster(rating_key: int):
+    """Proxies a resized poster image from Plex, server-side, so the
+    X-Plex-Token Plex requires for this (confirmed live -- a request
+    without it 401s) never has to appear in page source/browser history,
+    unlike Radarr's TMDB-hosted posters, which the browser can load
+    directly. A single small image fetch, not the kind of expensive
+    library-wide call disk_health/library/plex's own background loop
+    exist to keep out of request handlers -- bounded by PlexClient's own
+    default timeout, so a slow/dead Plex server can only ever stall this
+    one <img> tag's request, never the page around it.
+    """
+    with session(settings.db_path) as conn:
+        rows = {
+            r["key"]: r["value"]
+            for r in conn.execute(
+                "SELECT key, value FROM settings WHERE key IN ('plex_base_url', 'plex_token')"
+            ).fetchall()
+        }
+    base_url = rows.get("plex_base_url", "")
+    token = rows.get("plex_token", "")
+    if not base_url or not token:
+        raise HTTPException(status_code=404, detail="Plex not configured")
+
+    client = plex.PlexClient(base_url, token)
+    try:
+        content, content_type = client.fetch_poster(rating_key)
+    except httpx.HTTPError:
+        logger.exception("could not fetch Plex poster for ratingKey %r", rating_key)
+        raise HTTPException(status_code=502, detail="Plex unreachable") from None
+    finally:
+        client.close()
+
+    # Posters don't change once a movie's already in the library -- cache
+    # in the browser rather than re-fetching from Plex on every page view.
+    return Response(content=content, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
+
+
 # ----------------------------------------------------------------------
 # Webhook (external-facing -- the *arr calls this. URL unchanged, never
 # move this: it's already configured as a live Webhook connection URL in
@@ -779,6 +817,32 @@ def _enrich_with_radarr_matches(apps, files: list[dict]) -> None:
         f["quality_profiles"] = profiles_by_app[app_id]
 
 
+def _enrich_with_plex_poster_links(files: list[dict]) -> None:
+    """Mutates each file dict in place with `plex_quality` (pre-existing),
+    plus `plex_poster_url` (relocarr's own proxy route, never Plex
+    directly -- see plex.PlexClient.fetch_poster for why) and
+    `plex_link_url` (deep link to the movie's own page in Plex Web), both
+    None unless Plex is configured AND this specific file was actually
+    matched in Plex's library. Deliberately no fallback to a Radarr
+    poster when Plex isn't configured -- PLAN.md's item 4 spec calls for
+    a "Plex integration needed" placeholder instead; templates handle
+    that themselves off of `plex_quality_cache.checked_at`/`.index`
+    already being in their context (see transfer_log/log_duplicates).
+    """
+    base_url = plex_quality_cache.base_url
+    machine_identifier = plex_quality_cache.machine_identifier
+    for f in files:
+        quality = plex_quality_cache.index.get(f.get("name"))
+        f["plex_quality"] = quality
+        rating_key = quality.get("rating_key") if quality else None
+        if rating_key is not None and base_url and machine_identifier:
+            f["plex_poster_url"] = f"/plex/poster/{rating_key}"
+            f["plex_link_url"] = plex.build_plex_web_url(base_url, machine_identifier, rating_key)
+        else:
+            f["plex_poster_url"] = None
+            f["plex_link_url"] = None
+
+
 TRANSFER_LOG_STATES = ("DONE", "NEEDS_ATTENTION", "SKIPPED")
 
 
@@ -856,6 +920,7 @@ def transfer_log(
         )
         if filtered_movie_files:
             _enrich_with_radarr_matches(apps, filtered_movie_files)
+            _enrich_with_plex_poster_links(filtered_movie_files)
             for f in filtered_movie_files:
                 mtime = f.get("mtime")
                 f["mtime_str"] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d") if mtime else None
@@ -906,6 +971,7 @@ def transfer_log(
                 if movie_library_cache.scanned_at
                 else None
             ),
+            "plex_configured": bool(plex_quality_cache.checked_at or plex_quality_cache.index),
         },
     )
 
@@ -1197,17 +1263,13 @@ def log_duplicates(request: Request, error: str | None = None, result: str | Non
     all_files = [f for group in duplicate_groups for f in group]
     if all_files:
         _enrich_with_radarr_matches(apps, all_files)
+        # Read-only lookup against the background-cached Plex index, same
+        # "never a live external call inside a request" rule as
+        # disk_health/library/version_check -- see plex.py.
+        _enrich_with_plex_poster_links(all_files)
         for f in all_files:
             mtime = f.get("mtime")
             f["mtime_str"] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d") if mtime else None
-            # Read-only lookup against the background-cached Plex index,
-            # same "never a live external call inside a request" rule as
-            # disk_health/library/version_check -- see plex.py.
-            # Matched by filename, not full path -- Plex (on the Shield
-            # itself) and relocarr's own scan (via the CIFS mount) report
-            # completely different absolute paths for the same file; see
-            # plex.py's build_quality_index.
-            f["plex_quality"] = plex_quality_cache.index.get(Path(f["path"]).name)
 
     return templates.TemplateResponse(
         request,

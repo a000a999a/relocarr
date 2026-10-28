@@ -64,8 +64,12 @@ def _reset_plex_quality_cache():
     plex_quality_cache.duplicate_groups = []
     plex_quality_cache.checked_at = None
     plex_quality_cache.error = None
+    plex_quality_cache.base_url = None
+    plex_quality_cache.machine_identifier = None
     yield
     plex_quality_cache.index = {}
     plex_quality_cache.duplicate_groups = []
     plex_quality_cache.checked_at = None
     plex_quality_cache.error = None
+    plex_quality_cache.base_url = None
+    plex_quality_cache.machine_identifier = None

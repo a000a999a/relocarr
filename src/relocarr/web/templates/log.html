@@ -5,10 +5,10 @@
 
 <p style="margin: 0 0 16px; color: var(--text-dim); font-size: 13px; max-width: 760px;">
   Your movie library and transfer history: browse what's actually on disk by size below, see each
-  file's Radarr poster and the date it landed, and trigger a Redownload to replace an oversized
-  file with a smaller one at the same quality. The "Recent transfers" table at the bottom is a
-  history of finished transfers (success, failed, or skipped) -- for work still in progress, see
-  the Queue page.
+  file's Plex poster (linked to its page in Plex, when Plex is connected -- Settings &rarr; Plex)
+  and the date it landed, and trigger a Redownload to replace an oversized file with a smaller one
+  at the same quality. The "Recent transfers" table at the bottom is a history of finished
+  transfers (success, failed, or skipped) -- for work still in progress, see the Queue page.
 </p>
 
 <p style="margin: 0 0 16px;">
@@ -92,8 +92,12 @@
       {% endif %}
     </td>
     <td>
-      {% if f.movie_match and f.movie_match.poster_url %}
-      <img src="{{ f.movie_match.poster_url }}" alt="" loading="lazy" style="width: 36px; height: 54px; object-fit: cover; border-radius: 2px; display: block;">
+      {% if f.plex_poster_url %}
+      <a href="{{ f.plex_link_url }}" target="_blank" rel="noopener">
+        <img src="{{ f.plex_poster_url }}" alt="" loading="lazy" style="width: 36px; height: 54px; object-fit: cover; border-radius: 2px; display: block;">
+      </a>
+      {% elif not plex_configured %}
+      <span style="color: var(--text-dim); font-size: 9px; display: block; width: 36px;">Plex integration needed</span>
       {% endif %}
     </td>
     <td>{{ f.app_name }}</td>

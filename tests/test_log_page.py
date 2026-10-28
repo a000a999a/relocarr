@@ -265,7 +265,10 @@ def test_log_shows_replace_action_for_a_file_radarr_still_has(client, tmp_path):
 
 
 @respx.mock
-def test_log_shows_created_date_and_poster_for_a_file_radarr_still_has(client, tmp_path):
+def test_log_shows_created_date_and_plex_placeholder_when_plex_not_configured(client, tmp_path):
+    # PLAN.md item 4 (2026-10-28): the poster source switched from Radarr
+    # to Plex, with no fallback to Radarr's poster when Plex isn't
+    # configured -- a "Plex integration needed" placeholder shows instead.
     app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-poster")
     movie_library_cache.files = [
         {**_file(app_id, "Big.mkv", 5), "mtime": time.mktime((2026, 3, 4, 0, 0, 0, 0, 0, -1))}
@@ -293,7 +296,28 @@ def test_log_shows_created_date_and_poster_for_a_file_radarr_still_has(client, t
     resp = client.get("/log?min_gb=4")
     assert resp.status_code == 200
     assert "2026-03-04" in resp.text
-    assert 'src="https://image.tmdb.org/big.jpg"' in resp.text
+    assert "Plex integration needed" in resp.text
+    assert 'src="https://image.tmdb.org/big.jpg"' not in resp.text  # no fallback to Radarr's poster
+
+
+@respx.mock
+def test_log_shows_plex_poster_and_deep_link_when_configured_and_matched(client, tmp_path):
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-poster2")
+    movie_library_cache.files = [_file(app_id, "Big.mkv", 5)]
+    movie_library_cache.scanned_at = time.time()
+    respx.get("http://radarr-poster2/api/v3/movie").mock(return_value=httpx.Response(200, json=[]))
+    respx.get("http://radarr-poster2/api/v3/qualityprofile").mock(return_value=httpx.Response(200, json=[]))
+
+    plex_quality_cache.checked_at = time.time()
+    plex_quality_cache.index = {"Big.mkv": {"resolution": "1080", "rating_key": 501}}
+    plex_quality_cache.base_url = "http://plex:32400"
+    plex_quality_cache.machine_identifier = "abc123"
+
+    resp = client.get("/log?min_gb=4")
+    assert resp.status_code == 200
+    assert 'src="/plex/poster/501"' in resp.text
+    assert 'href="http://plex:32400/web/index.html#!/server/abc123/details?key=/library/metadata/501"' in resp.text
+    assert "Plex integration needed" not in resp.text
 
 
 @respx.mock
@@ -841,6 +865,37 @@ def test_duplicates_page_hints_to_configure_plex_when_not_set_up(client):
     resp = client.get("/log/duplicates")
     assert resp.status_code == 200
     assert "/settings/plex" in resp.text
+    assert "Plex integration needed" in resp.text
+
+
+def test_duplicates_page_shows_plex_poster_and_deep_link_when_matched(client):
+    # PLAN.md item 4 (2026-10-28): the poster source switched from Radarr
+    # to Plex, proxied through relocarr's own /plex/poster route rather
+    # than linked to directly (keeps the Plex token out of page source).
+    app_id = _insert_app("radarr", "/t")
+    movie_library_cache.files = [
+        _file(app_id, "Example Feature (1982).mkv", 4),
+        _file(app_id, "Example Feature.1982.mp4", 1),
+    ]
+    plex_quality_cache.checked_at = time.time()
+    plex_quality_cache.index = {
+        "Example Feature (1982).mkv": {"resolution": "1080", "rating_key": 501},
+        "Example Feature.1982.mp4": {"resolution": "1080", "rating_key": 501},
+    }
+    plex_quality_cache.duplicate_groups = [
+        [
+            {"name": "Example Feature (1982).mkv", "size_bytes": int(4 * 1024**3)},
+            {"name": "Example Feature.1982.mp4", "size_bytes": int(1 * 1024**3)},
+        ]
+    ]
+    plex_quality_cache.base_url = "http://plex:32400"
+    plex_quality_cache.machine_identifier = "abc123"
+
+    resp = client.get("/log/duplicates")
+    assert resp.status_code == 200
+    assert 'src="/plex/poster/501"' in resp.text
+    assert 'href="http://plex:32400/web/index.html#!/server/abc123/details?key=/library/metadata/501"' in resp.text
+    assert "Plex integration needed" not in resp.text
 
 
 def test_duplicates_page_groups_files_sharing_title_and_year(client):
@@ -1012,3 +1067,39 @@ def test_duplicates_delete_does_not_attempt_a_plex_refresh_when_plex_is_not_conf
 
     assert resp.status_code == 303
     assert not orphan_path.exists()
+
+
+def test_plex_poster_route_returns_404_when_plex_not_configured(client):
+    resp = client.get("/plex/poster/501")
+    assert resp.status_code == 404
+
+
+@respx.mock
+def test_plex_poster_route_proxies_the_resized_image_from_plex(client):
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE settings SET value = 'http://plex:32400' WHERE key = 'plex_base_url'")
+        conn.execute("UPDATE settings SET value = 'tok' WHERE key = 'plex_token'")
+
+    respx.get("http://plex:32400/photo/:/transcode").mock(
+        return_value=httpx.Response(200, content=b"fake-jpeg-bytes", headers={"content-type": "image/jpeg"})
+    )
+
+    resp = client.get("/plex/poster/501")
+
+    assert resp.status_code == 200
+    assert resp.content == b"fake-jpeg-bytes"
+    assert resp.headers["content-type"] == "image/jpeg"
+    assert "max-age" in resp.headers["cache-control"]
+
+
+@respx.mock
+def test_plex_poster_route_returns_502_when_plex_is_unreachable(client):
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE settings SET value = 'http://plex:32400' WHERE key = 'plex_base_url'")
+        conn.execute("UPDATE settings SET value = 'tok' WHERE key = 'plex_token'")
+
+    respx.get("http://plex:32400/photo/:/transcode").mock(return_value=httpx.Response(401))
+
+    resp = client.get("/plex/poster/501")
+
+    assert resp.status_code == 502

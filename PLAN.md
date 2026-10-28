@@ -693,13 +693,24 @@ downloads so hardlinks work), destination on the network share.
   correlate them to a real torrent at all. Both real movies from the original report (jobs
   91/116) confirmed fixed live, plus a retroactive fix applied to all 30 previously-affected
   jobs.
-* **Item 4 -- Plex posters + deep link.** On the Library page's redownload table and the
-  duplicate-review page, switch the poster source to Plex's own artwork (and make it a
-  clickable link to that movie's page in Plex) whenever Plex is configured; when it's not,
-  show a placeholder reading exactly "Plex integration needed" instead of falling back to
-  Radarr's poster. Ship alongside a version bump (1.0.0 -> 1.1.0) and fuller Plex
-  documentation. **Explicit instruction: do not start before 2026-10-29, and even then only
-  when the user asks -- do not auto-start.** (added 2026-10-25, not investigated yet)
+* **Item 4 -- Plex posters + deep link.** RESOLVED 2026-10-28 (one day before the stated
+  2026-10-29 gate -- user explicitly asked to proceed early, confirmed via AskUserQuestion).
+  Both the Library page's size-bucket file list and the duplicate-review page now show each
+  file's real poster, pulled from Plex (via `PlexClient.fetch_poster`, Plex's own
+  `/photo/:/transcode` endpoint for a resized ~3KB image rather than the ~3MB original) and
+  proxied through a new `/plex/poster/{rating_key}` route -- confirmed live the X-Plex-Token
+  genuinely 401s without it, so the image is proxied server-side rather than linked to
+  directly, keeping the token out of page source/browser history. The poster links to that
+  movie's own page in Plex Web (`build_plex_web_url`, format confirmed live against this
+  project's own server: `<base>/web/index.html#!/server/<machineIdentifier>/details?key=
+  /library/metadata/<ratingKey>`). When Plex isn't configured, a "Plex integration needed"
+  placeholder shows instead -- no fallback to Radarr's poster, per the original spec.
+  `PlexClient.build_quality_index()` now also captures each item's `ratingKey`;
+  `PlexQualityCache` gained `base_url`/`machine_identifier`, refreshed every check cycle
+  alongside the existing quality index. Version bumped 1.0.1 -> 1.1.0, README gained a Plex
+  integration section. 9 new/updated tests (plex.py: machine identifier, poster transcode,
+  deep-link URL; routes: the proxy route's configured/unreachable/success paths, both pages'
+  placeholder-vs-poster rendering), 320 tests passing.
 * **Item 5 -- file transfers destabilizing the Shield.** RESOLVED 2026-10-28. Root cause
   confirmed live via ADB logcat (see item 8): a sustained large-file write (a 3.01GB movie
   transfer triggered this) arrives at the Shield faster than it can flush to

@@ -84,17 +84,59 @@ class PlexClient:
             resp = self._client.get(f"/library/sections/{key}/all")
             resp.raise_for_status()
             for item in resp.json().get("MediaContainer", {}).get("Metadata", []):
+                rating_key = item.get("ratingKey")
                 for media in item.get("Media", []):
                     quality = {
                         "resolution": media.get("videoResolution"),
                         "codec": media.get("videoCodec"),
                         "bitrate": media.get("bitrate"),
+                        "rating_key": rating_key,
                     }
                     for part in media.get("Part", []):
                         path = part.get("file")
                         if path:
                             index[PurePosixPath(path).name] = quality
         return index
+
+    def get_machine_identifier(self) -> str | None:
+        """The per-server ID a Plex Web deep link needs (see
+        build_plex_web_url) -- confirmed live, 2026-10-28, via GET
+        /identity, same endpoint test_connection deliberately avoids for
+        auth checking (it doesn't need a valid token either), but fine
+        here since this is only ever called right after a successful
+        /library/sections call in the same check cycle.
+        """
+        resp = self._client.get("/identity")
+        resp.raise_for_status()
+        return resp.json().get("MediaContainer", {}).get("machineIdentifier")
+
+    def fetch_poster(self, rating_key: int, width: int = 72, height: int = 108) -> tuple[bytes, str]:
+        """Server-side resized poster JPEG via Plex's own photo transcoder.
+        Confirmed live, 2026-10-28: the full-resolution original
+        (GET /library/metadata/{id}/thumb) is multi-megabyte -- much too
+        large to load once per row across a 40-140 row table -- while the
+        transcode endpoint returns a few KB at this size. Also confirmed
+        the un-versioned `/thumb` path (no trailing timestamp segment)
+        resolves to the current poster correctly, so callers only need
+        the stable ratingKey, never Plex's own thumb path string.
+
+        Proxied through relocarr's own server rather than linked to
+        directly from the page: fetching requires `X-Plex-Token`
+        (confirmed live -- a request without it 401s), and that token
+        must never appear in page source/browser history.
+        """
+        resp = self._client.get(
+            "/photo/:/transcode",
+            params={
+                "width": width,
+                "height": height,
+                "minSize": 1,
+                "upscale": 0,
+                "url": f"/library/metadata/{rating_key}/thumb",
+            },
+        )
+        resp.raise_for_status()
+        return resp.content, resp.headers.get("content-type", "image/jpeg")
 
     def list_duplicate_groups(self) -> list[list[dict]]:
         """Each returned group is one movie Plex's own metadata agent has
@@ -158,6 +200,16 @@ class PlexClient:
         self._client.close()
 
 
+def build_plex_web_url(base_url: str, machine_identifier: str, rating_key: int) -> str:
+    """A movie's own page in Plex Web -- format confirmed live, 2026-10-28,
+    by opening a real link built this way against this project's own
+    server. Unlike fetch_poster, this is a plain browser navigation (not
+    an image fetch our server proxies), so it needs no token: Plex Web
+    handles its own sign-in state in the user's browser.
+    """
+    return f"{base_url.rstrip('/')}/web/index.html#!/server/{machine_identifier}/details?key=/library/metadata/{rating_key}"
+
+
 class PlexQualityCache:
     """Mirrors disk_health.py/library.py/version_check.py: a live Plex API
     call (here, potentially a large library listing) has no business
@@ -165,7 +217,9 @@ class PlexQualityCache:
     the background loop below ever calls Plex. Holds Plex's duplicate
     groups alongside the quality index -- both come from the same
     per-cycle Plex check, there's no reason to run two separate loops
-    against the same server.
+    against the same server. base_url/machine_identifier are cached here
+    too (not re-read from settings per page view) so routes.py can build
+    poster/deep-link URLs from this one object, same as the index.
     """
 
     def __init__(self) -> None:
@@ -173,12 +227,14 @@ class PlexQualityCache:
         self.duplicate_groups: list[list[dict]] = []
         self.checked_at: float | None = None
         self.error: str | None = None
+        self.base_url: str | None = None
+        self.machine_identifier: str | None = None
 
 
 cache = PlexQualityCache()
 
 
-def _check(db_path: Path) -> tuple[dict[str, dict], list[list[dict]]] | None:
+def _check(db_path: Path) -> tuple[dict[str, dict], list[list[dict]], str, str | None] | None:
     """Returns None (not an error) when Plex isn't configured yet at all --
     distinct from a configured-but-failing connection, which sets
     cache.error instead of silently leaving the index empty.
@@ -199,7 +255,9 @@ def _check(db_path: Path) -> tuple[dict[str, dict], list[list[dict]]] | None:
 
     client = PlexClient(base_url, token)
     try:
-        return client.build_quality_index(), client.list_duplicate_groups()
+        index, duplicate_groups = client.build_quality_index(), client.list_duplicate_groups()
+        machine_identifier = client.get_machine_identifier()
+        return index, duplicate_groups, base_url, machine_identifier
     finally:
         client.close()
 
@@ -211,7 +269,7 @@ async def run_plex_quality_check_forever(
         try:
             result = await asyncio.wait_for(asyncio.to_thread(_check, db_path), timeout=CHECK_TIMEOUT_SECONDS)
             if result is not None:
-                cache.index, cache.duplicate_groups = result
+                cache.index, cache.duplicate_groups, cache.base_url, cache.machine_identifier = result
                 cache.checked_at = time.time()
                 cache.error = None
         except TimeoutError:

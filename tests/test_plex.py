@@ -6,7 +6,12 @@ import respx
 
 from relocarr.config import settings as app_settings
 from relocarr.db import init_db, session
-from relocarr.plex import PlexClient, PlexQualityCache, run_plex_quality_check_forever
+from relocarr.plex import (
+    PlexClient,
+    PlexQualityCache,
+    build_plex_web_url,
+    run_plex_quality_check_forever,
+)
 
 
 @respx.mock
@@ -60,6 +65,7 @@ def test_build_quality_index_only_scans_movie_sections():
                         {
                             "title": "Example Feature",
                             "year": 1982,
+                            "ratingKey": 501,
                             "Media": [
                                 {
                                     "videoResolution": "1080",
@@ -89,12 +95,56 @@ def test_build_quality_index_only_scans_movie_sections():
             "resolution": "1080",
             "codec": "hevc",
             "bitrate": 8000,
+            "rating_key": 501,
         }
     }
     # the TV section (key "2") was never requested
     assert "http://plex:32400/library/sections/2/all" not in [
         str(c.request.url) for c in respx.calls
     ]
+
+
+@respx.mock
+def test_get_machine_identifier():
+    client = PlexClient("http://plex:32400", "tok")
+    respx.get("http://plex:32400/identity").mock(
+        return_value=httpx.Response(
+            200, json={"MediaContainer": {"machineIdentifier": "abc123"}}
+        )
+    )
+
+    result = client.get_machine_identifier()
+    client.close()
+
+    assert result == "abc123"
+
+
+@respx.mock
+def test_fetch_poster_uses_the_transcode_endpoint_with_an_unversioned_thumb_path():
+    # Confirmed live, 2026-10-28: the full-size original
+    # (/library/metadata/{id}/thumb) runs multi-megabyte, far too large for
+    # a 40-140 row table -- the transcode endpoint returns a resized JPEG
+    # instead, and the un-versioned thumb path (no trailing timestamp) was
+    # confirmed to still resolve to the current poster.
+    client = PlexClient("http://plex:32400", "tok")
+    route = respx.get("http://plex:32400/photo/:/transcode").mock(
+        return_value=httpx.Response(200, content=b"fake-jpeg-bytes", headers={"content-type": "image/jpeg"})
+    )
+
+    content, content_type = client.fetch_poster(501, width=72, height=108)
+    client.close()
+
+    assert content == b"fake-jpeg-bytes"
+    assert content_type == "image/jpeg"
+    sent_params = dict(route.calls[0].request.url.params)
+    assert sent_params["url"] == "/library/metadata/501/thumb"
+    assert sent_params["width"] == "72"
+    assert sent_params["height"] == "108"
+
+
+def test_build_plex_web_url():
+    url = build_plex_web_url("http://plex:32400/", "abc123", 501)
+    assert url == "http://plex:32400/web/index.html#!/server/abc123/details?key=/library/metadata/501"
 
 
 @respx.mock
@@ -218,6 +268,9 @@ async def test_run_plex_quality_check_forever_populates_the_cache(tmp_path):
     respx.get("http://plex:32400/library/sections").mock(
         return_value=httpx.Response(200, json={"MediaContainer": {"Directory": []}})
     )
+    respx.get("http://plex:32400/identity").mock(
+        return_value=httpx.Response(200, json={"MediaContainer": {"machineIdentifier": "abc123"}})
+    )
 
     cache = PlexQualityCache()
     stop_event = asyncio.Event()
@@ -230,3 +283,5 @@ async def test_run_plex_quality_check_forever_populates_the_cache(tmp_path):
     assert cache.duplicate_groups == []
     assert cache.checked_at is not None
     assert cache.error is None
+    assert cache.base_url == "http://plex:32400"
+    assert cache.machine_identifier == "abc123"
