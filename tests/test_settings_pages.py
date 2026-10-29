@@ -109,7 +109,7 @@ def test_system_page_renders_with_no_apps(client):
     resp = client.get("/system")
     assert resp.status_code == 200
     assert "No apps configured yet." in resp.text
-    assert "1.3.0" in resp.text  # version
+    assert "1.4.0" in resp.text  # version
 
 
 def test_system_page_shows_the_log_file_path(client):
@@ -166,13 +166,13 @@ def test_system_page_shows_up_to_date_when_current_version_is_latest(client):
 
 
 def test_system_page_shows_an_update_link_when_a_newer_version_exists(client):
-    version_check_cache.latest_version = "v1.4.0"
+    version_check_cache.latest_version = "v1.5.0"
     version_check_cache.checked_at = 123.0
 
     resp = client.get("/system")
     assert resp.status_code == 200
-    assert "v1.4.0 available" in resp.text
-    assert 'href="https://github.com/a000a999a/relocarr/tree/v1.4.0"' in resp.text
+    assert "v1.5.0 available" in resp.text
+    assert 'href="https://github.com/a000a999a/relocarr/tree/v1.5.0"' in resp.text
 
 
 def test_system_page_shows_disk_space_for_configured_paths(client, tmp_path):

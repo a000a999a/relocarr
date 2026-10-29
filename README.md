@@ -15,7 +15,7 @@ See [PLAN.md](PLAN.md) for the full design and the rationale behind it.
 relocarr only moves, renames, and cleans up files that your own Radarr/Sonarr setup has already imported -- it contains no media, trackers, or sources of its own, and is meant for content you already have the rights to.
 
 
-**Status: v1.3.0 — stable, running real production traffic since v0.1.0.** Every core piece
+**Status: v1.4.0 — stable, running real production traffic since v0.1.0.** Every core piece
 (webhook receiver, job state machine, removal gate, download-client watcher, scheduler, Preflight
 page, Docker image) plus the Redownload, Queue, and Library-page tooling built since the initial
 release (PLAN.md §19) is implemented, tested, and has handled real imports end to end — see
