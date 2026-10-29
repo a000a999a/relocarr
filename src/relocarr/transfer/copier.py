@@ -28,16 +28,20 @@ _TRANSIENT_RSYNC_EXIT_CODES = {10, 11, 12, 23, 30}
 _SENDER_SIDE_ERROR_MARKER = "[sender]"
 
 # Root-caused live on the Shield, 2026-10-28: a sustained large-file write
-# arrives faster than the Shield can flush to its (often USB-thumbdrive-backed)
-# storage, so com.nvidia.shield.smbserver's own write buffers pile up in RAM
-# until Android's OOM killer kills smbd outright -- which drops the CIFS mount
-# out from under the in-flight rsync process, wedging it in unkillable D-state
-# (see rsync_copy's docstring) until the mount itself recovers. Throttling the
-# write rate client-side keeps it within what the Shield can actually drain,
-# so the buffer never has a chance to grow unbounded. 10 MiB/s is comfortably
-# above what even a slow USB thumbdrive sustains for writes, while leaving
-# real headroom below whatever rate was triggering the OOM kill.
-_BWLIMIT = "10M"
+# arrives faster than the destination can flush to its own storage, so a
+# resource-constrained media box's write buffers can pile up in RAM until
+# the OS's OOM killer kills the SMB server outright -- which drops the
+# mount out from under the in-flight rsync process, wedging it in
+# unkillable D-state (see rsync_copy's docstring) until the mount itself
+# recovers. Throttling the write rate client-side keeps it within what the
+# destination can actually drain, so the buffer never has a chance to grow
+# unbounded. 10 MiB/s is comfortably above what even a slow USB thumbdrive
+# sustains for writes, while leaving real headroom below whatever rate was
+# triggering the OOM kill on the one real destination this was confirmed
+# against -- never assumed to be the right number for every setup, which
+# is why callers can override it per app (Settings -> App Config) rather
+# than this being the last word.
+_DEFAULT_BWLIMIT_MBPS = 10
 
 
 @dataclass
@@ -47,7 +51,9 @@ class CopyResult:
     transient: bool = False
 
 
-def rsync_copy(source: Path, dest: Path, *, timeout: float | None = None) -> CopyResult:
+def rsync_copy(
+    source: Path, dest: Path, *, timeout: float | None = None, bwlimit_mbps: int | None = None
+) -> CopyResult:
     """Copy `source` to `dest` via rsync.
 
     No `--inplace`: rsync writes to a hidden temp file in the destination
@@ -77,10 +83,14 @@ def rsync_copy(source: Path, dest: Path, *, timeout: float | None = None) -> Cop
     necessarily actual process termination. A caller must not assume a
     timed-out call freed anything.
 
-    `--bwlimit=_BWLIMIT` throttles the write rate to prevent the wedge
-    above from happening in the first place -- see _BWLIMIT's comment for
-    the root cause (an OOM-killed smbd) this addresses.
+    `--bwlimit` throttles the write rate to prevent the wedge above from
+    happening in the first place -- see _DEFAULT_BWLIMIT_MBPS's comment
+    for the root cause (an OOM-killed smbd) this addresses. `bwlimit_mbps`
+    overrides the module default (Settings -> App Config, per-app -- not
+    every destination has the same RAM/storage headroom the one this was
+    first confirmed against does).
     """
+    bwlimit = bwlimit_mbps if bwlimit_mbps is not None else _DEFAULT_BWLIMIT_MBPS
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         proc = subprocess.run(
@@ -89,7 +99,7 @@ def rsync_copy(source: Path, dest: Path, *, timeout: float | None = None) -> Cop
                 "-a",
                 "--partial",
                 "--partial-dir=.rsync-partial",
-                f"--bwlimit={_BWLIMIT}",
+                f"--bwlimit={bwlimit}M",
                 str(source),
                 str(dest),
             ],

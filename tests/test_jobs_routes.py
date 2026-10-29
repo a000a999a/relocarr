@@ -148,6 +148,20 @@ def test_jobs_filter_by_app_shows_only_matching_jobs(client):
     assert "app2.mkv" not in resp.text
 
 
+def test_jobs_filter_app_id_blank_means_all_apps(client):
+    # Root-caused live, 2026-10-29: the filter form's "All apps" option
+    # submits app_id="" (the unfiltered default), and FastAPI/Pydantic
+    # refuses to coerce an empty string to an optional int -- 422'd on
+    # every single "All apps" + another filter combination.
+    _insert_app_and_job("NEEDS_ATTENTION", target_path="/t/app1.mkv")
+    _insert_app_and_job("NEEDS_ATTENTION", target_path="/t/app2.mkv")
+
+    resp = client.get("/jobs?app_id=&state=NEEDS_ATTENTION")
+    assert resp.status_code == 200
+    assert "app1.mkv" in resp.text
+    assert "app2.mkv" in resp.text
+
+
 def test_jobs_filter_by_target_substring(client):
     _insert_app_and_job("NEEDS_ATTENTION", target_path="/t/TestMovieOne.2014.mkv")
     _insert_app_and_job("NEEDS_ATTENTION", target_path="/t/Dune.2021.mkv")

@@ -3,7 +3,7 @@ import pytest
 from relocarr.arr.base import QueueEntry
 from relocarr.clients.base import Torrent
 from relocarr.db import init_db, session
-from relocarr.jobs.scheduler import _poll_interval, run_app_seal_tick, run_app_tick
+from relocarr.jobs.scheduler import _bwlimit_mbps, _poll_interval, run_app_seal_tick, run_app_tick
 
 from .fakes import FakeArrApp, FakeDownloadClient
 
@@ -193,3 +193,20 @@ def test_poll_interval_falls_back_to_default_if_missing(tmp_path):
     with session(empty_db) as conn:
         conn.execute("DELETE FROM settings WHERE key = 'poll_interval_seconds'")
     assert _poll_interval(empty_db) == 15.0
+
+
+def test_bwlimit_mbps_reads_a_valid_override():
+    assert _bwlimit_mbps({"bwlimit_mbps": "25"}) == 25
+
+
+def test_bwlimit_mbps_falls_back_to_none_on_missing_blank_or_non_numeric():
+    # None here means "let copier.py's own 10 MB/s default apply" -- never
+    # a literal 0, which rsync's own --bwlimit treats as uncapped.
+    assert _bwlimit_mbps({}) is None
+    assert _bwlimit_mbps({"bwlimit_mbps": ""}) is None
+    assert _bwlimit_mbps({"bwlimit_mbps": "not a number"}) is None
+
+
+def test_bwlimit_mbps_falls_back_to_none_on_zero_or_negative():
+    assert _bwlimit_mbps({"bwlimit_mbps": "0"}) is None
+    assert _bwlimit_mbps({"bwlimit_mbps": "-5"}) is None

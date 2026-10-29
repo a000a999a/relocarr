@@ -22,11 +22,15 @@ def run_once(
     verify_mode: str,
     settle_window_seconds: float = 30.0,
     dry_run: bool = False,
+    bwlimit_mbps: int | None = None,
 ) -> None:
     """One orchestration pass over this app's jobs: advances every eligible
     job exactly one step. Does not loop internally -- a scheduled background
     task (not yet wired into main.py) decides polling cadence, per the
     Settings page's configurable poll interval (Section 9).
+
+    `bwlimit_mbps`: this app's own rsync throttle override (Settings ->
+    App Config), passed straight through to advance_copy/rsync_copy.
     """
     # next_attempt_at gates a job that just took a transient failure --
     # Section 12's exponential backoff, computed and set by
@@ -38,7 +42,12 @@ def run_once(
         (app_id,),
     ).fetchall():
         advance_copy(
-            conn, job, sidecar_extensions=sidecar_extensions, verify_mode=verify_mode, dry_run=dry_run
+            conn,
+            job,
+            sidecar_extensions=sidecar_extensions,
+            verify_mode=verify_mode,
+            dry_run=dry_run,
+            bwlimit_mbps=bwlimit_mbps,
         )
 
     for job in conn.execute(

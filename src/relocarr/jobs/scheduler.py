@@ -27,6 +27,7 @@ def run_app_tick(
     sidecar_extensions: list[str],
     verify_mode: str,
     dry_run: bool = False,
+    bwlimit_mbps: int | None = None,
 ) -> None:
     """One app's worth of a job-processing tick: advance every job one step
     (Section 5). Sealing (Section 4 phase A) used to run as the first step
@@ -39,6 +40,12 @@ def run_app_tick(
     could only ever run between two full passes of this call. Kept separate
     from `_tick` below so it's directly testable with injected fakes, same
     pattern as jobs/worker.py's tests.
+
+    `bwlimit_mbps` is global (Settings -> General), not per-app -- it
+    protects whatever's actually receiving the writes, not the *arr app
+    driving them, and a user may point several apps at the same
+    RAM-constrained destination. See `_bwlimit_mbps`/copier.py's
+    `rsync_copy` for where the value comes from and why it exists.
     """
     run_once(
         conn,
@@ -48,6 +55,7 @@ def run_app_tick(
         sidecar_extensions=sidecar_extensions,
         verify_mode=verify_mode,
         dry_run=dry_run,
+        bwlimit_mbps=bwlimit_mbps,
     )
 
 
@@ -84,6 +92,21 @@ def _poll_interval(db_path: Path) -> float:
         return DEFAULT_POLL_INTERVAL_SECONDS
 
 
+def _bwlimit_mbps(settings_rows: dict[str, str]) -> int | None:
+    """Parses Settings -> General's rsync throttle override. Not validated
+    at write time (same as poll_interval_seconds) -- validated here
+    instead, every read, so a bad/missing/non-positive value can never
+    reach rsync_copy as a literal "0" (which rsync treats as *uncapped*,
+    the exact OOM risk this setting exists to prevent) -- falls back to
+    None, which copier.py's own default (10 MB/s) then applies.
+    """
+    try:
+        value = int(settings_rows.get("bwlimit_mbps", ""))
+        return value if value > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _build_download_client(db_path: Path, app_id: int) -> DownloadClient | None:
     with session(db_path) as conn:
         dc_row = conn.execute(
@@ -106,6 +129,7 @@ def _tick(db_path: Path) -> None:
     ]
     verify_mode = settings_rows.get("verify_mode", "size")
     dry_run = settings_rows.get("dry_run", "true") == "true"
+    bwlimit_mbps = _bwlimit_mbps(settings_rows)
 
     for app in apps:
         arr_client = arr.make_app(app["kind"], app["base_url"], app["api_key"])
@@ -122,6 +146,7 @@ def _tick(db_path: Path) -> None:
                     sidecar_extensions=sidecar_extensions,
                     verify_mode=verify_mode,
                     dry_run=dry_run,
+                    bwlimit_mbps=bwlimit_mbps,
                 )
         except Exception:  # noqa: BLE001 -- one app's failure must not stop the others
             logger.exception("scheduler tick failed for app %r", app["name"])

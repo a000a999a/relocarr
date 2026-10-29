@@ -82,6 +82,22 @@ def test_log_filter_recent_transfers_by_app(client):
     assert "app2-file.mkv" not in resp.text
 
 
+def test_log_filter_log_app_id_blank_means_all_apps(client):
+    # Root-caused live, 2026-10-29: the filter form's "All apps" option
+    # submits log_app_id="" (the unfiltered default), and FastAPI/Pydantic
+    # refuses to coerce an empty string to an optional int -- 422'd on
+    # every single "All apps" + another filter combination.
+    app1_id = _insert_app("radarr", "/t1", base_url="http://log-app1b")
+    app2_id = _insert_app("radarr", "/t2", base_url="http://log-app2b")
+    _insert_log_job(app1_id, "/t/app1-blank.mkv", state="DONE")
+    _insert_log_job(app2_id, "/t/app2-blank.mkv", state="DONE")
+
+    resp = client.get("/log?log_app_id=&log_state=DONE")
+    assert resp.status_code == 200
+    assert "app1-blank.mkv" in resp.text
+    assert "app2-blank.mkv" in resp.text
+
+
 def test_log_filter_recent_transfers_error_only(client):
     app_id = _insert_app("radarr", "/t")
     _insert_log_job(app_id, "/t/clean.mkv", state="DONE", error=None)

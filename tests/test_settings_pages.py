@@ -108,7 +108,7 @@ def test_system_page_renders_with_no_apps(client):
     resp = client.get("/system")
     assert resp.status_code == 200
     assert "No apps configured yet." in resp.text
-    assert "1.1.2" in resp.text  # version
+    assert "1.2.0" in resp.text  # version
 
 
 def test_system_page_shows_the_log_file_path(client):
@@ -165,13 +165,13 @@ def test_system_page_shows_up_to_date_when_current_version_is_latest(client):
 
 
 def test_system_page_shows_an_update_link_when_a_newer_version_exists(client):
-    version_check_cache.latest_version = "v1.2.0"
+    version_check_cache.latest_version = "v1.3.0"
     version_check_cache.checked_at = 123.0
 
     resp = client.get("/system")
     assert resp.status_code == 200
-    assert "v1.2.0 available" in resp.text
-    assert 'href="https://github.com/a000a999a/relocarr/tree/v1.2.0"' in resp.text
+    assert "v1.3.0 available" in resp.text
+    assert 'href="https://github.com/a000a999a/relocarr/tree/v1.3.0"' in resp.text
 
 
 def test_system_page_shows_disk_space_for_configured_paths(client, tmp_path):
@@ -396,3 +396,32 @@ def test_plex_settings_save_does_not_persist_on_a_failed_connection(client):
     with session(app_settings.db_path) as conn:
         row = conn.execute("SELECT value FROM settings WHERE key = 'plex_token'").fetchone()
     assert row["value"] == ""  # still the default -- the failed attempt was never saved
+
+
+def test_settings_general_shows_the_default_bwlimit(client):
+    resp = client.get("/settings/general")
+    assert resp.status_code == 200
+    assert 'value="10"' in resp.text
+
+
+def test_settings_general_saves_a_bwlimit_override(client):
+    # Global, not per-app -- it protects whatever's actually receiving the
+    # writes, not the *arr app driving them (2026-10-28).
+    resp = client.post(
+        "/settings/general",
+        data={
+            "poll_interval_seconds": "15",
+            "sidecar_extensions": "srt",
+            "verify_mode": "size",
+            "bwlimit_mbps": "25",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    with session(app_settings.db_path) as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'bwlimit_mbps'").fetchone()
+    assert row["value"] == "25"
+
+    resp = client.get("/settings/general")
+    assert 'value="25"' in resp.text

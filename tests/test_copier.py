@@ -35,6 +35,20 @@ def test_rsync_copy_throttles_bandwidth_to_avoid_oom_killing_the_shields_smbd(tm
     assert "--bwlimit=10M" in args
 
 
+def test_rsync_copy_honors_a_bwlimit_override(tmp_path):
+    # Settings -> General, added 2026-10-28: the 10 MB/s default is
+    # conservative for the one real destination it was confirmed against --
+    # a user with more RAM/storage headroom (or a different destination
+    # entirely) can raise it, global, not per-app.
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        rsync_copy(tmp_path / "src" / "movie.mkv", tmp_path / "dest" / "movie.mkv", bwlimit_mbps=25)
+
+    args = mock_run.call_args[0][0]
+    assert "--bwlimit=25M" in args
+    assert "--bwlimit=10M" not in args
+
+
 def test_rsync_copy_consumes_a_pre_existing_partial_dir_entry_on_success(tmp_path):
     # Simulates a retry picking up after an earlier interrupted attempt --
     # rsync itself should find the partial-dir entry, use it, and remove it

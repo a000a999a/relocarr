@@ -59,6 +59,7 @@ def advance_copy(
     sidecar_extensions: list[str],
     verify_mode: str,
     dry_run: bool = False,
+    bwlimit_mbps: int | None = None,
 ) -> None:
     """IMPORTED/COPYING -> VERIFIED -> PUBLISHED, or NEEDS_ATTENTION on a
     permanent failure. A transient failure (including a failed destination
@@ -74,6 +75,9 @@ def advance_copy(
     actually running the step and discarding the result; a real rsync
     attempt could still touch the destination (create its temp file) even
     on failure, which dry-run must never risk.
+
+    `bwlimit_mbps`: this app's own override (Settings -> App Config), or
+    None to use copier.py's own default -- see rsync_copy's docstring.
     """
     source = Path(job["source_path"])
     target = Path(job["target_path"])
@@ -94,7 +98,7 @@ def advance_copy(
         return
 
     _set_state(conn, job["id"], "COPYING")
-    result = rsync_copy(source, target)
+    result = rsync_copy(source, target, bwlimit_mbps=bwlimit_mbps)
     if not result.ok:
         if result.transient:
             _schedule_retry(conn, job, error=result.error)
@@ -109,7 +113,7 @@ def advance_copy(
 
     for sidecar in sidecar_paths(source, sidecar_extensions):
         sidecar_target = target.with_name(sidecar.name)
-        sidecar_result = rsync_copy(sidecar, sidecar_target)
+        sidecar_result = rsync_copy(sidecar, sidecar_target, bwlimit_mbps=bwlimit_mbps)
         if not sidecar_result.ok and not sidecar_result.transient:
             # A sidecar is a nice-to-have, not the media file itself -- log
             # and continue rather than blocking the whole job on a subtitle.

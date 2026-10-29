@@ -97,6 +97,14 @@ DEFAULT_SETTINGS = {
     "poll_interval_seconds": "15",
     "sidecar_extensions": "srt",
     "verify_mode": "size",  # 'size' | 'checksum'
+    "bwlimit_mbps": "10",  # rsync's own write-rate cap, MB/s -- root-caused live,
+                            # 2026-10-28: a sustained large write can exhaust a
+                            # resource-constrained destination's RAM and OOM-kill
+                            # its SMB server; see copier.py's rsync_copy docstring.
+                            # 10 is conservative -- raise it if the destination can
+                            # take it, lower it if it can't; global, not per-app,
+                            # since it protects whatever's actually receiving the
+                            # writes, not the *arr app driving them.
     "plex_base_url": "",  # empty = not configured yet; see plex.py
     "plex_token": "",
 }

@@ -842,6 +842,34 @@ downloads so hardlinks work), destination on the network share.
   within the next ~15s poll regardless, confirmed via Transmission (`status: 0`) and the
   `downloads` table. Version bumped 1.1.1 -> 1.1.2. 2 new/updated tests (seal-only, and
   job-processing-without-sealing), 325 passing.
+* **Item 14 -- rsync transfer rate limit made configurable (Settings -> General), plus two
+  "All apps" filter 422s found along the way.** RESOLVED 2026-10-29. User wanted the
+  `--bwlimit` value from item 5's fix (hardcoded 10 MB/s) user-adjustable -- their own real
+  destination can likely sustain more, and different users' destinations have different
+  RAM/storage headroom (worked example given: ~1.4GB RAM used uncapped = OOM, ~250MB at 25
+  MB/s = likely safe, scales roughly linearly with write speed). Originally asked for per-app
+  (App Config), then explicitly redirected mid-implementation to Settings -> General instead
+  -- global, not per-app, since it protects whatever's actually receiving the writes, not the
+  *arr app driving them, and several apps can point at the same destination. New
+  `bwlimit_mbps` global setting (DEFAULT_SETTINGS, default "10"), threaded through
+  `run_app_tick -> run_once -> advance_copy -> rsync_copy` as a plain optional parameter at
+  each layer; `scheduler._bwlimit_mbps()` parses it defensively (blank/non-numeric/zero/
+  negative all fall back to None, so a bad value can never reach rsync as a literal "0" --
+  rsync's own `--bwlimit=0` means *uncapped*, the exact risk this setting exists to prevent).
+  Verified live: saved 25 via the real route, confirmed parsed correctly against the real
+  production DB.
+
+  While testing this live, found (and fixed) two pre-existing, unrelated 422 bugs: `/log`'s
+  `log_app_id` and `/jobs`'s `app_id` were both typed `int | None` -- FastAPI/Pydantic refuses
+  to coerce an empty string to an optional int, so each page's own "All apps" filter dropdown
+  (`<option value="">`) 422'd on every single submit combined with any other filter. Both
+  retyped to `str | None`, parsed by hand (blank/invalid -> None, same defensive pattern as
+  `bwlimit_mbps` above). Confirmed exhaustively via `grep ': int | None = None'` across
+  routes.py that no other route shares this pattern. Verified live against the exact failing
+  URLs from the user's own screenshot.
+
+  Version bumped 1.1.2 -> 1.2.0 (new setting = feature, not just a fix). 8 new/updated tests,
+  333 passing.
 ## 19. Post-v0.1 feature additions (2026-10-24/25)
 
 Built in production against the real deployment (§17), not from the roadmap above — each one

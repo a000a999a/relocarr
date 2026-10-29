@@ -459,12 +459,14 @@ def settings_general_submit(
     poll_interval_seconds: str = Form(...),
     sidecar_extensions: str = Form(...),
     verify_mode: str = Form(...),
+    bwlimit_mbps: str = Form(...),
 ):
     values = {
         "dry_run": "true" if dry_run else "false",
         "poll_interval_seconds": poll_interval_seconds,
         "sidecar_extensions": sidecar_extensions,
         "verify_mode": verify_mode,
+        "bwlimit_mbps": bwlimit_mbps,
     }
     with session(settings.db_path) as conn:
         for key, value in values.items():
@@ -700,20 +702,30 @@ JOB_STATES = (
 @router.get("/jobs")
 def jobs_list(
     request: Request,
-    app_id: int | None = None,
+    app_id: str | None = None,
     state: str | None = None,
     target: str | None = None,
     error_only: bool = False,
 ):
+    # Same fix as /log's log_app_id (2026-10-29): `int | None` 422s on the
+    # filter form's "All apps" option (value=""), since FastAPI/Pydantic
+    # won't coerce an empty string to an optional int. Parsed by hand.
+    app_id_filter: int | None = None
+    if app_id:
+        try:
+            app_id_filter = int(app_id)
+        except ValueError:
+            pass
+
     with session(settings.db_path) as conn:
         apps = conn.execute("SELECT * FROM apps ORDER BY name").fetchall()
 
         query = """SELECT jobs.*, apps.name AS app_name FROM jobs
                    JOIN apps ON apps.id = jobs.app_id WHERE 1=1"""
         params: list = []
-        if app_id:
+        if app_id_filter:
             query += " AND jobs.app_id = ?"
-            params.append(app_id)
+            params.append(app_id_filter)
         if state:
             query += " AND jobs.state = ?"
             params.append(state)
@@ -732,7 +744,7 @@ def jobs_list(
             "jobs": jobs,
             "apps": apps,
             "job_states": JOB_STATES,
-            "filter_app_id": app_id,
+            "filter_app_id": app_id_filter,
             "filter_state": state,
             "filter_target": target,
             "filter_error_only": error_only,
@@ -853,7 +865,7 @@ def transfer_log(
     max_gb: float | None = None,
     redownload_error: str | None = None,
     redownload_result: str | None = None,
-    log_app_id: int | None = None,
+    log_app_id: str | None = None,
     log_state: str | None = None,
     log_error_only: bool = False,
 ):
@@ -872,6 +884,18 @@ def transfer_log(
     and each file in that list can be sent back to Radarr for a fresh,
     smaller-release search (POST /log/redownload[-bulk]).
     """
+    # log_app_id is deliberately `str | None`, not `int | None` -- confirmed
+    # live, 2026-10-29: FastAPI/Pydantic refuses to coerce an empty string
+    # to an optional int, so the filter form's own "All apps" option
+    # (value="", the unfiltered default) 422'd on every single submit. Parsed
+    # by hand instead, same as every other filter value on this page.
+    app_id_filter: int | None = None
+    if log_app_id:
+        try:
+            app_id_filter = int(log_app_id)
+        except ValueError:
+            pass
+
     with session(settings.db_path) as conn:
         apps = conn.execute("SELECT * FROM apps").fetchall()
 
@@ -879,9 +903,9 @@ def transfer_log(
                             JOIN apps ON apps.id = jobs.app_id
                             WHERE jobs.state IN ('DONE', 'NEEDS_ATTENTION', 'SKIPPED')"""
         entries_params: list = []
-        if log_app_id:
+        if app_id_filter:
             entries_query += " AND jobs.app_id = ?"
-            entries_params.append(log_app_id)
+            entries_params.append(app_id_filter)
         if log_state:
             entries_query += " AND jobs.state = ?"
             entries_params.append(log_state)
@@ -963,7 +987,7 @@ def transfer_log(
             "redownload_result": redownload_result,
             "apps": apps,
             "transfer_log_states": TRANSFER_LOG_STATES,
-            "filter_log_app_id": log_app_id,
+            "filter_log_app_id": app_id_filter,
             "filter_log_state": log_state,
             "filter_log_error_only": log_error_only,
             "library_scanned_at": (

@@ -18,6 +18,16 @@
     <option value="checksum" {% if settings.verify_mode == 'checksum' %}selected{% endif %}>Checksum</option>
   </select>
 
+  <label for="bwlimit_mbps">Transfer rate limit (MB/s)</label>
+  <input type="number" name="bwlimit_mbps" id="bwlimit_mbps" min="1" value="{{ settings.bwlimit_mbps }}">
+  <p style="color: var(--text-dim); font-size: 12px; margin: 4px 0 0;">
+    Caps how fast each file copy writes to the destination. 10 is conservative -- raised to
+    protect a RAM-constrained destination from being overwhelmed by a sustained large write
+    (confirmed live: can OOM-kill the destination's own SMB server). Raise it if your
+    destination can take it; lower it if it can't. Applies to every app's transfers, since it
+    protects whatever's actually receiving the writes.
+  </p>
+
   <button type="submit">Save</button>
 </form>
 {% endblock %}
