@@ -769,6 +769,74 @@ def test_redownload_bulk_acts_only_on_submitted_checkboxes(client, tmp_path):
 
 
 @respx.mock
+def test_redownload_bulk_one_slow_release_search_does_not_abort_the_rest(client, tmp_path):
+    # Confirmed live, 2026-10-29: an interactive release search timing out
+    # for ONE checked file used to be caught by the batch's outer
+    # except-httpx.HTTPError, which wrongly skipped every other file in
+    # the same app's batch too and reported "Radarr unreachable" even
+    # though Radarr itself was reachable throughout. Only the file whose
+    # own request failed should be skipped; the rest of the batch must
+    # still be attempted.
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-slow")
+    movie_library_cache.files = [
+        _file(app_id, "Slow.mkv", 3.5, path="/t/Slow.mkv"),
+        _file(app_id, "Fine.mkv", 3.6, path="/t/Fine.mkv"),
+    ]
+    movie_library_cache.scanned_at = time.time()
+
+    respx.get("http://radarr-slow/api/v3/movie").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 1,
+                    "title": "Slow",
+                    "year": 2020,
+                    "qualityProfileId": 1,
+                    "monitored": True,
+                    "movieFile": {"id": 101, "path": "/t/Slow.mkv"},
+                },
+                {
+                    "id": 2,
+                    "title": "Fine",
+                    "year": 2021,
+                    "qualityProfileId": 1,
+                    "monitored": True,
+                    "movieFile": {"id": 102, "path": "/t/Fine.mkv"},
+                },
+            ],
+        )
+    )
+
+    def _release_side_effect(request):
+        if request.url.params.get("movieId") == "1":
+            raise httpx.ReadTimeout("timed out", request=request)
+        return httpx.Response(
+            200,
+            json=[{"guid": "g", "indexerId": 1, "size": 1 * 1024**3, "title": "Smaller", "seeders": 50, "rejections": []}],
+        )
+
+    respx.get("http://radarr-slow/api/v3/release").mock(side_effect=_release_side_effect)
+    respx.post("http://radarr-slow/api/v3/release").mock(return_value=httpx.Response(200))
+    respx.delete(url__regex=r".*/api/v3/moviefile/.*").mock(return_value=httpx.Response(200))
+    respx.get("http://radarr-slow/api/v3/qualityprofile").mock(return_value=httpx.Response(200, json=[]))
+
+    resp = client.post(
+        "/log/redownload-bulk",
+        data={
+            "paths": [f"{app_id}|/t/Slow.mkv", f"{app_id}|/t/Fine.mkv"],
+            "min_gb": "3",
+            "max_gb": "4",
+        },
+    )
+    assert resp.status_code == 200
+    assert "Redownload triggered for 1 file" in resp.text
+    assert "1 skipped" in resp.text
+    assert "a Radarr request failed or timed out for some" in resp.text
+    assert "Radarr unreachable" not in resp.text
+
+
+@respx.mock
 def test_redownload_bulk_unchecking_a_box_leaves_that_file_untouched(client, tmp_path):
     app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-k")
     movie_library_cache.files = [
@@ -819,6 +887,24 @@ def test_redownload_bulk_unchecking_a_box_leaves_that_file_untouched(client, tmp
     assert "Redownload triggered for 1 file" in resp.text
     assert delete_route.call_count == 1
     assert delete_route.calls.last.request.url.path == "/api/v3/moviefile/101"
+
+
+@respx.mock
+def test_redownload_bulk_reports_radarr_unreachable_when_the_whole_app_cant_be_reached(client, tmp_path):
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-down")
+    movie_library_cache.files = [_file(app_id, "Unreachable.mkv", 3.5, path="/t/Unreachable.mkv")]
+    movie_library_cache.scanned_at = time.time()
+
+    respx.get("http://radarr-down/api/v3/movie").mock(side_effect=httpx.ConnectError("refused"))
+
+    resp = client.post(
+        "/log/redownload-bulk",
+        data={"paths": [f"{app_id}|/t/Unreachable.mkv"], "min_gb": "3", "max_gb": "4"},
+    )
+    assert resp.status_code == 200
+    assert "Redownload triggered for 0 files" in resp.text
+    assert "1 skipped" in resp.text
+    assert "Radarr unreachable for some" in resp.text
 
 
 def test_redownload_bulk_with_nothing_checked_does_nothing(client):

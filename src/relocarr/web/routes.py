@@ -1211,6 +1211,7 @@ def log_redownload_bulk(
     succeeded = 0
     skipped = 0
     had_connection_error = False
+    had_request_error = False
     for app_id, files in targets_by_app.items():
         app = apps_by_id.get(app_id)
         if app is None:
@@ -1218,7 +1219,16 @@ def log_redownload_bulk(
             continue
         client = arr.RadarrApp(app["base_url"], app["api_key"])
         try:
-            by_path, by_title_year = client.build_movie_index()
+            try:
+                by_path, by_title_year = client.build_movie_index()
+            except httpx.HTTPError:
+                # Can't even list this app's movies -- Radarr itself is
+                # genuinely unreachable, so none of its checked files can
+                # be attempted at all.
+                logger.exception("bulk redownload: could not reach Radarr for app %r", app_id)
+                had_connection_error = True
+                skipped += len(files)
+                continue
             for f in files:
                 try:
                     outcome = _apply_redownload(
@@ -1235,17 +1245,35 @@ def log_redownload_bulk(
                 except ValueError as exc:
                     logger.warning("bulk redownload skipped: %s", exc)
                     skipped += 1
-        except httpx.HTTPError:
-            logger.exception("bulk redownload failed for app %r", app_id)
-            had_connection_error = True
-            skipped += len(files)
+                except httpx.HTTPError:
+                    # Confirmed live, 2026-10-29: an interactive release
+                    # search (GET /api/v3/release) can time out for one
+                    # file -- e.g. a slow indexer -- even though Radarr
+                    # itself is fully reachable (proven by build_movie_index
+                    # above having just succeeded). Used to be caught by
+                    # the outer except, which wrongly skipped every
+                    # remaining file in this app's batch and reported
+                    # "Radarr unreachable" when it wasn't. Only this one
+                    # file is skipped now; the rest of the batch continues.
+                    logger.exception(
+                        "bulk redownload: Radarr request failed for %r (app %r)",
+                        f.get("name"),
+                        app_id,
+                    )
+                    had_request_error = True
+                    skipped += 1
         finally:
             client.close()
 
     result = f"Redownload triggered for {succeeded} file{'s' if succeeded != 1 else ''}."
     if skipped:
         result += f" {skipped} skipped"
-        result += " (Radarr unreachable for some) -- see the server log." if had_connection_error else "."
+        reasons = []
+        if had_connection_error:
+            reasons.append("Radarr unreachable for some")
+        if had_request_error:
+            reasons.append("a Radarr request failed or timed out for some")
+        result += f" ({'; '.join(reasons)}) -- see the server log." if reasons else "."
     return RedirectResponse(_log_redirect_url(min_gb, max_gb, result=result), status_code=303)
 
 
