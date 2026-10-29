@@ -2128,6 +2128,10 @@ def system_status(request: Request):
                         "label": f"{app['name']} ({label})",
                         "ok": None,  # pending, not yet an error
                         "folder_used": folder_used,
+                        # Total isn't known yet either, so a percentage would
+                        # be meaningless here -- the folder_used GiB figure
+                        # still renders on its own.
+                        "folder_used_pct": None,
                     }
                 )
             elif entry["ok"]:
@@ -2151,6 +2155,17 @@ def system_status(request: Request):
                         "total": entry["total"],
                         "ok": True,
                         "folder_used": folder_used,
+                        # What this specific folder takes up, against the whole
+                        # disk it lives on -- not against its own content (a
+                        # mostly-empty staging folder and a mostly-full target
+                        # folder both deserve a near-zero or near-100% figure
+                        # here, not a number that's only meaningful next to the
+                        # other apps' folders).
+                        "folder_used_pct": (
+                            round(folder_used / entry["total"] * 100, 1)
+                            if folder_used is not None and entry["total"]
+                            else None
+                        ),
                     }
                 )
             else:
@@ -2161,6 +2176,7 @@ def system_status(request: Request):
                         "error": entry["error"],
                         "ok": False,
                         "folder_used": folder_used,
+                        "folder_used_pct": None,  # total isn't known for an unreachable path
                     }
                 )
 

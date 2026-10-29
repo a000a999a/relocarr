@@ -282,6 +282,47 @@ def test_system_page_shows_used_by_this_folder_from_cache(client, tmp_path):
     assert "3.0 GiB" in resp.text
 
 
+def test_system_page_shows_folder_usage_against_the_disk_total(client, tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    app_id = _insert_app(str(staging))
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE apps SET target_root = ? WHERE id = ?", ("", app_id))
+    movie_library_cache.scanned_at = time.time()
+    disk_space_cache.entries[str(staging)] = {
+        "free": 15 * 1024**3,
+        "total": 20 * 1024**3,
+        "dev": 333,
+        "ok": True,
+    }
+    folder_usage_cache.entries[str(staging)] = {"used": 5 * 1024**3, "ok": True}
+
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "5.0 GiB" in resp.text
+    assert "25.0% of 20.0 GiB total" in resp.text
+
+
+def test_system_page_shows_folder_usage_without_a_percentage_when_disk_space_is_still_pending(
+    client, tmp_path
+):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    app_id = _insert_app(str(staging))
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE apps SET target_root = ? WHERE id = ?", ("", app_id))
+    movie_library_cache.scanned_at = time.time()
+    # disk_space_cache has no entry for this path yet (pending) -- total is
+    # unknown, so no percentage should render, and this must not crash the
+    # page (Jinja raising on an undefined key used to be the actual bug).
+    folder_usage_cache.entries[str(staging)] = {"used": 5 * 1024**3, "ok": True}
+
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "5.0 GiB" in resp.text
+    assert "% of" not in resp.text
+
+
 def test_system_page_shows_folder_usage_as_not_scanned_yet_before_first_scan(client, tmp_path):
     staging = tmp_path / "staging"
     staging.mkdir()
