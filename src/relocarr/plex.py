@@ -90,6 +90,13 @@ class PlexClient:
                         "resolution": media.get("videoResolution"),
                         "codec": media.get("videoCodec"),
                         "bitrate": media.get("bitrate"),
+                        # Per-Media duration (this specific file's own
+                        # runtime), not the item-level one -- a movie with
+                        # more than one version (e.g. an extended cut) can
+                        # genuinely have a different length per file, which
+                        # is exactly the case the Log page's redownload
+                        # table cares about. Milliseconds, per Plex's API.
+                        "duration_ms": media.get("duration"),
                         "rating_key": rating_key,
                     }
                     for part in media.get("Part", []):

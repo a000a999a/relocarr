@@ -71,6 +71,7 @@ def test_build_quality_index_only_scans_movie_sections():
                                     "videoResolution": "1080",
                                     "videoCodec": "hevc",
                                     "bitrate": 8000,
+                                    "duration": 7_260_000,  # 121 minutes, in ms
                                     # Deliberately a different path shape than relocarr's own
                                     # scan would ever report (Plex sees its own local storage
                                     # path, not the CIFS mount path) -- the point of this test.
@@ -95,6 +96,7 @@ def test_build_quality_index_only_scans_movie_sections():
             "resolution": "1080",
             "codec": "hevc",
             "bitrate": 8000,
+            "duration_ms": 7_260_000,
             "rating_key": 501,
         }
     }

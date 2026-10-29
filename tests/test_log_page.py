@@ -337,6 +337,38 @@ def test_log_shows_plex_poster_and_deep_link_when_configured_and_matched(client,
 
 
 @respx.mock
+def test_log_shows_runtime_in_minutes_from_plex(client, tmp_path):
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-runtime")
+    movie_library_cache.files = [_file(app_id, "Big.mkv", 5)]
+    movie_library_cache.scanned_at = time.time()
+    respx.get("http://radarr-runtime/api/v3/movie").mock(return_value=httpx.Response(200, json=[]))
+    respx.get("http://radarr-runtime/api/v3/qualityprofile").mock(return_value=httpx.Response(200, json=[]))
+
+    plex_quality_cache.checked_at = time.time()
+    plex_quality_cache.index = {"Big.mkv": {"resolution": "1080", "rating_key": 501, "duration_ms": 7_260_000}}
+
+    resp = client.get("/log?min_gb=4")
+    assert resp.status_code == 200
+    assert "121 min" in resp.text
+
+
+@respx.mock
+def test_log_shows_a_dash_for_runtime_when_plex_has_no_match(client, tmp_path):
+    app_id = _insert_app("radarr", str(tmp_path), base_url="http://radarr-noruntime")
+    movie_library_cache.files = [_file(app_id, "Unmatched.mkv", 5)]
+    movie_library_cache.scanned_at = time.time()
+    respx.get("http://radarr-noruntime/api/v3/movie").mock(return_value=httpx.Response(200, json=[]))
+    respx.get("http://radarr-noruntime/api/v3/qualityprofile").mock(return_value=httpx.Response(200, json=[]))
+
+    plex_quality_cache.checked_at = time.time()
+    plex_quality_cache.index = {}
+
+    resp = client.get("/log?min_gb=4")
+    assert resp.status_code == 200
+    assert "&mdash;" in resp.text
+
+
+@respx.mock
 def test_log_shows_remonitor_action_for_a_movie_radarr_lost_track_of(client, tmp_path):
     # This is relocarr's own normal end state for an already-processed
     # movie: unmonitored, no file, but still a known title/year in Radarr.

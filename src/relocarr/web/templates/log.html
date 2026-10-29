@@ -83,7 +83,7 @@
   unparseable filename have no checkbox -- there's nothing reliable to act on.
 </p>
 <table style="margin-bottom: 24px;">
-  <tr><th><input type="checkbox" class="select-all" title="select all"></th><th></th><th>App</th><th>File</th><th>Size</th><th>Created</th><th>Action</th></tr>
+  <tr><th><input type="checkbox" class="select-all" title="select all"></th><th></th><th>App</th><th>File</th><th>Size</th><th>Length</th><th>Created</th><th>Action</th></tr>
   {% for f in filtered_movie_files %}
   <tr>
     <td>
@@ -103,6 +103,9 @@
     <td>{{ f.app_name }}</td>
     <td style="font-size: 12px;">{{ f.name }}</td>
     <td>{{ (f.size_bytes / (1024**3)) | round(2) }} GB</td>
+    <td style="font-size: 12px;">
+      {% if f.runtime_minutes %}{{ f.runtime_minutes }} min{% else %}<span style="color: var(--text-dim);">&mdash;</span>{% endif %}
+    </td>
     <td style="font-size: 12px; white-space: nowrap;">{{ f.mtime_str }}</td>
     <td>
       {% if f.redownload_action == 'unknown' %}

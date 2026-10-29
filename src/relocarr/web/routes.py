@@ -832,11 +832,12 @@ def _enrich_with_radarr_matches(apps, files: list[dict]) -> None:
 
 def _enrich_with_plex_poster_links(files: list[dict]) -> None:
     """Mutates each file dict in place with `plex_quality` (pre-existing),
-    plus `plex_poster_url` (relocarr's own proxy route, never Plex
-    directly -- see plex.PlexClient.fetch_poster for why) and
-    `plex_link_url` (deep link to the movie's own page in Plex Web), both
-    None unless Plex is configured AND this specific file was actually
-    matched in Plex's library. Deliberately no fallback to a Radarr
+    `runtime_minutes` (this file's own length, from the same Plex lookup --
+    None unless Plex matched this file), plus `plex_poster_url` (relocarr's
+    own proxy route, never Plex directly -- see plex.PlexClient.fetch_poster
+    for why) and `plex_link_url` (deep link to the movie's own page in Plex
+    Web), both None unless Plex is configured AND this specific file was
+    actually matched in Plex's library. Deliberately no fallback to a Radarr
     poster when Plex isn't configured -- PLAN.md's item 4 spec calls for
     a "Plex integration needed" placeholder instead; templates handle
     that themselves off of `plex_quality_cache.checked_at`/`.index`
@@ -847,6 +848,8 @@ def _enrich_with_plex_poster_links(files: list[dict]) -> None:
     for f in files:
         quality = plex_quality_cache.index.get(f.get("name"))
         f["plex_quality"] = quality
+        duration_ms = quality.get("duration_ms") if quality else None
+        f["runtime_minutes"] = round(duration_ms / 60_000) if duration_ms else None
         rating_key = quality.get("rating_key") if quality else None
         if rating_key is not None and base_url and machine_identifier:
             f["plex_poster_url"] = f"/plex/poster/{rating_key}"
