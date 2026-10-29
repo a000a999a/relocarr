@@ -69,8 +69,36 @@
     {% endfor %}
   </select>
   <button type="submit" style="font-size: 12px;">Redownload checked files below</button>
-  <span style="color: var(--text-dim); font-size: 11px;">check the files below you want, then submit -- nothing is redownloaded if nothing's checked</span>
+  <span id="bulk-redownload-hint" style="color: var(--text-dim); font-size: 11px;">check the files below you want, then submit -- nothing is redownloaded if nothing's checked</span>
+  <span id="bulk-redownload-status" style="color: var(--text-dim); font-size: 11px; display: none;"></span>
 </form>
+<script>
+  (function () {
+    // Confirmed live, 2026-10-29: this form can genuinely take minutes --
+    // one live Radarr release search per checked file, each up to 60s on
+    // its own if an indexer is slow -- and the page gave zero feedback in
+    // the meantime, indistinguishable from having frozen. base.html's own
+    // generic submit handler already disables the button; this adds the
+    // actual "why is nothing happening" explanation, scoped to this one
+    // form since it's the slow one, not applied app-wide.
+    var form = document.getElementById("bulk-redownload-form");
+    var hint = document.getElementById("bulk-redownload-hint");
+    var status = document.getElementById("bulk-redownload-status");
+    if (!form || !hint || !status) return;
+    form.addEventListener("submit", function () {
+      var checked = document.querySelectorAll(
+        'input[type="checkbox"][form="bulk-redownload-form"]:checked'
+      ).length;
+      if (checked === 0) return; // nothing submitted -- let the server's own message show instead
+      hint.style.display = "none";
+      status.textContent =
+        "Working through " + checked + " checked file" + (checked === 1 ? "" : "s") +
+        " -- each may need a live release search against your indexers, so this can take a " +
+        "few minutes. Don't close this page.";
+      status.style.display = "inline";
+    });
+  })();
+</script>
 <p style="margin: 0 0 12px; color: var(--text-dim); font-size: 12px;">
   Every action here only ever grabs a release that's genuinely smaller than the current file -- if nothing
   smaller turns up, nothing is downloaded. "Redownload" deletes a file Radarr still tracks and replaces it.

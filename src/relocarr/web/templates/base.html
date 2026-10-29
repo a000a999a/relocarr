@@ -189,6 +189,28 @@
         });
       });
     })();
+
+    // Every form's submit button disables itself on submit, with its text
+    // swapped to "Working..." -- confirmed live, 2026-10-29: a form whose
+    // action genuinely takes a while (e.g. the Log page's bulk redownload,
+    // one live Radarr release search per checked file) gave no visual
+    // feedback at all while the browser sat on the blocked POST, which
+    // looked indistinguishable from the page having frozen. Applied to
+    // every form site-wide, not just the slow ones -- a cheap, generic
+    // improvement that also stops an impatient double-click from
+    // double-submitting whatever the form does. Page navigation (the
+    // normal POST-redirect-GET this app always does) replaces the DOM
+    // anyway, so there's no "stuck disabled forever" state to undo.
+    (function () {
+      document.querySelectorAll("form").forEach(function (form) {
+        form.addEventListener("submit", function () {
+          form.querySelectorAll('button[type="submit"]').forEach(function (btn) {
+            btn.disabled = true;
+            btn.textContent = "Working…";
+          });
+        });
+      });
+    })();
   </script>
 </body>
 </html>
