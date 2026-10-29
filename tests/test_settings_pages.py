@@ -336,6 +336,55 @@ def test_system_page_shows_folder_usage_as_not_scanned_yet_before_first_scan(cli
     assert "not scanned yet" in resp.text
 
 
+def test_system_page_links_to_the_log_viewer(client):
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert 'href="/system/log"' in resp.text
+
+
+def test_system_log_view_shows_the_tail_of_the_log_file(client):
+    app_settings.log_path.parent.mkdir(parents=True, exist_ok=True)
+    app_settings.log_path.write_text("line one\nline two\nline three\n")
+
+    resp = client.get("/system/log")
+    assert resp.status_code == 200
+    assert "line one" in resp.text
+    assert "line three" in resp.text
+
+
+def test_system_log_view_only_shows_the_last_n_lines(client):
+    app_settings.log_path.parent.mkdir(parents=True, exist_ok=True)
+    app_settings.log_path.write_text("\n".join(f"line {i}" for i in range(1, 61)) + "\n")
+
+    # 50 is this route's own minimum (see test_..._clamps_an_out_of_range_...
+    # below), so it's the smallest value that actually filters anything out
+    # of a 60-line file.
+    resp = client.get("/system/log?lines=50")
+    assert resp.status_code == 200
+    assert "line 60" in resp.text
+    assert "line 11" in resp.text
+    assert "line 10" not in resp.text
+
+
+def test_system_log_view_clamps_an_out_of_range_lines_param(client):
+    app_settings.log_path.parent.mkdir(parents=True, exist_ok=True)
+    app_settings.log_path.write_text("only line\n")
+
+    # Neither a huge nor a negative/zero value should error -- both clamp
+    # to this route's own sane bounds rather than reading the whole file
+    # unbounded or returning nothing.
+    resp = client.get("/system/log?lines=999999999")
+    assert resp.status_code == 200
+    resp2 = client.get("/system/log?lines=0")
+    assert resp2.status_code == 200
+
+
+def test_system_log_view_shows_empty_state_before_any_log_file_exists(client):
+    resp = client.get("/system/log")
+    assert resp.status_code == 200
+    assert "No log file yet" in resp.text
+
+
 def test_setup_guide_renders(client):
     resp = client.get("/setup-guide")
     assert resp.status_code == 200

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block nav_system %}active{% endblock %}
+{% block content %}
+<h1>Server Log</h1>
+<p style="color: var(--text-dim); font-size: 12px; margin: 0 0 12px;">
+  Last {{ log_lines | length }} line{{ '' if log_lines | length == 1 else 's' }} of {{ log_path }}
+  (newest at the bottom, same order as the file itself) &middot;
+  <a href="/system/log?lines={{ lines }}">refresh</a>
+  {% if lines < max_lines %}
+  &middot; <a href="/system/log?lines={{ (lines * 2) if lines * 2 <= max_lines else max_lines }}">show more</a>
+  {% endif %}
+  {% if lines != default_lines %}
+  &middot; <a href="/system/log">reset to last {{ default_lines }}</a>
+  {% endif %}
+  &middot; <a href="/system">back to System</a>
+</p>
+{% if log_lines %}
+<pre style="background: var(--bg-input); border-radius: 4px; padding: 12px; overflow-x: auto; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 75vh; overflow-y: auto;">{% for line in log_lines %}{{ line }}{% endfor %}</pre>
+{% else %}
+<div class="card empty-state" style="padding: 16px 0;">
+  No log file yet at {{ log_path }} -- it's created on first write (see System's own "Log file" row).
+</div>
+{% endif %}
+{% endblock %}

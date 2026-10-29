@@ -124,7 +124,7 @@
     </td>
   </tr>
   <tr><td style="color: var(--text-dim);">Database</td><td>Sqlite -- {{ db_path }}</td></tr>
-  <tr><td style="color: var(--text-dim);">Log file</td><td>{{ log_path }} <span style="color: var(--text-dim); font-size: 12px;">(7 days kept, rotates daily)</span></td></tr>
+  <tr><td style="color: var(--text-dim);">Log file</td><td>{{ log_path }} <span style="color: var(--text-dim); font-size: 12px;">(7 days kept, rotates daily)</span> &middot; <a href="/system/log">view recent lines</a></td></tr>
   <tr><td style="color: var(--text-dim);">Docker</td><td>{{ "Yes" if in_docker else "No" }}</td></tr>
   <tr><td style="color: var(--text-dim);">Uptime</td><td>{{ uptime_seconds // 3600 }}h {{ (uptime_seconds % 3600) // 60 }}m</td></tr>
   <tr><td style="color: var(--text-dim);">Apps configured</td><td>{{ app_count }} <span style="color: var(--text-dim); font-size: 12px;">(Radarr/Sonarr only)</span></td></tr>

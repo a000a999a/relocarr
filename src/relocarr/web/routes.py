@@ -4,6 +4,7 @@ import secrets
 import shutil
 import sqlite3
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -2267,5 +2268,44 @@ def system_status(request: Request):
                 if version_check_cache.checked_at
                 else None
             ),
+        },
+    )
+
+
+DEFAULT_LOG_LINES = 500
+MAX_LOG_LINES = 5000
+
+
+def _tail_log_lines(path: Path, max_lines: int) -> list[str]:
+    """Last `max_lines` lines of the log file. Confirmed live, 2026-10-29:
+    a result message pointing at "the server log" (e.g. bulk redownload's
+    own skip reasons) was true but useless -- there was no way to actually
+    see it without SSH access to the host. Reads the whole file
+    sequentially (simple and correct, no hand-rolled reverse-seek) but
+    only ever holds `max_lines` of it in memory via the deque's maxlen --
+    plenty fast for a local file that's capped at 7 days by
+    configure_logging's own daily rotation. Returns [] if the file hasn't
+    been created yet (same case configure_logging's own try/except already
+    handles -- a fresh install, or /config not writable outside Docker).
+    """
+    if not path.is_file():
+        return []
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        return list(deque(f, maxlen=max_lines))
+
+
+@router.get("/system/log")
+def system_log_view(request: Request, lines: int = DEFAULT_LOG_LINES):
+    lines = max(50, min(lines, MAX_LOG_LINES))
+    log_lines = _tail_log_lines(settings.log_path, lines)
+    return templates.TemplateResponse(
+        request,
+        "system_log.html",
+        {
+            "log_lines": log_lines,
+            "log_path": str(settings.log_path),
+            "lines": lines,
+            "default_lines": DEFAULT_LOG_LINES,
+            "max_lines": MAX_LOG_LINES,
         },
     )
