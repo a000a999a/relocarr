@@ -286,8 +286,8 @@ Same table, with `<staging>/tv` as the root folder and *Rename Episodes* on, plu
   let it download again; the conflict policy handles the existing destination file.
 * **The *arr no longer shows the file** (it will look "missing"/unmonitored). Availability in
   request apps (Seerr/Overseerr) must come from the media server sync. To be verified.
-* **Stop-on-completion ends seeding immediately**, which is harmful on private trackers. It is
-  a per-client toggle with a warning.
+* **Stop-on-completion ends seeding immediately**, which can violate a torrent client's own seeding
+  requirements. It is a per-client toggle with a warning.
 
 A possible v2 that keeps the *arr in sync (a symlink "shadow library" in staging) is
 deliberately out of scope: more moving parts, and upgrade edge cases.
