@@ -23,6 +23,7 @@ from ..clients.transmission import TransmissionClient
 from ..config import settings
 from ..db import session
 from ..disk_health import cache as disk_space_cache
+from ..disk_health import folder_usage_cache
 from ..library import cache as movie_library_cache
 from ..library import find_duplicate_groups
 from ..library import find_duplicate_groups_from_plex
@@ -2109,17 +2110,39 @@ def system_status(request: Request):
     # projection, the only other place that used to call it directly).
     disk_space = []
     seen_paths: set[str] = set()
+    seen_devs: set[object] = set()
+    disk_total_free = 0
+    disk_total_total = 0
     for app in apps:
         for label, path in (("staging", app["staging_root"]), ("target", app["target_root"])):
             if not path or path in seen_paths:
                 continue
             seen_paths.add(path)
             entry = disk_space_cache.entries.get(path)
+            folder_entry = folder_usage_cache.entries.get(path)
+            folder_used = folder_entry["used"] if folder_entry and folder_entry["ok"] else None
             if entry is None:
                 disk_space.append(
-                    {"path": path, "label": f"{app['name']} ({label})", "ok": None}  # pending, not yet an error
+                    {
+                        "path": path,
+                        "label": f"{app['name']} ({label})",
+                        "ok": None,  # pending, not yet an error
+                        "folder_used": folder_used,
+                    }
                 )
             elif entry["ok"]:
+                # Two apps can share one physical disk under different
+                # subfolders (e.g. both targets land on the same NAS mount)
+                # -- dev dedupes those so the total line below doesn't count
+                # that disk's free/total space twice. Falls back to the path
+                # itself when dev is missing (an older/manually-seeded cache
+                # entry), which just forgoes dedup for that one entry rather
+                # than erroring.
+                dedup_key = entry.get("dev", path)
+                if dedup_key not in seen_devs:
+                    seen_devs.add(dedup_key)
+                    disk_total_free += entry["free"]
+                    disk_total_total += entry["total"]
                 disk_space.append(
                     {
                         "path": path,
@@ -2127,12 +2150,29 @@ def system_status(request: Request):
                         "free": entry["free"],
                         "total": entry["total"],
                         "ok": True,
+                        "folder_used": folder_used,
                     }
                 )
             else:
                 disk_space.append(
-                    {"path": path, "label": f"{app['name']} ({label})", "error": entry["error"], "ok": False}
+                    {
+                        "path": path,
+                        "label": f"{app['name']} ({label})",
+                        "error": entry["error"],
+                        "ok": False,
+                        "folder_used": folder_used,
+                    }
                 )
+
+    disk_total = (
+        {
+            "free": disk_total_free,
+            "total": disk_total_total,
+            "used": disk_total_total - disk_total_free,
+        }
+        if disk_total_total
+        else None
+    )
 
     uptime_seconds = int(time.monotonic() - START_TIME)
 
@@ -2142,6 +2182,7 @@ def system_status(request: Request):
         {
             "health": health,
             "disk_space": disk_space,
+            "disk_total": disk_total,
             "version": VERSION,
             "db_path": str(settings.db_path),
             "log_path": str(settings.log_path),
@@ -2161,6 +2202,11 @@ def system_status(request: Request):
             "disk_checked_at": (
                 datetime.fromtimestamp(disk_space_cache.checked_at).strftime("%Y-%m-%d %H:%M:%S")
                 if disk_space_cache.checked_at
+                else None
+            ),
+            "folder_checked_at": (
+                datetime.fromtimestamp(folder_usage_cache.checked_at).strftime("%Y-%m-%d %H:%M:%S")
+                if folder_usage_cache.checked_at
                 else None
             ),
             "latest_version": version_check_cache.latest_version,

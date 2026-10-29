@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from relocarr.config import settings as app_settings
 from relocarr.db import init_db, session
 from relocarr.disk_health import cache as disk_space_cache
+from relocarr.disk_health import folder_usage_cache
 from relocarr.library import cache as movie_library_cache
 from relocarr.version_check import cache as version_check_cache
 
@@ -108,7 +109,7 @@ def test_system_page_renders_with_no_apps(client):
     resp = client.get("/system")
     assert resp.status_code == 200
     assert "No apps configured yet." in resp.text
-    assert "1.2.0" in resp.text  # version
+    assert "1.3.0" in resp.text  # version
 
 
 def test_system_page_shows_the_log_file_path(client):
@@ -165,13 +166,13 @@ def test_system_page_shows_up_to_date_when_current_version_is_latest(client):
 
 
 def test_system_page_shows_an_update_link_when_a_newer_version_exists(client):
-    version_check_cache.latest_version = "v1.3.0"
+    version_check_cache.latest_version = "v1.4.0"
     version_check_cache.checked_at = 123.0
 
     resp = client.get("/system")
     assert resp.status_code == 200
-    assert "v1.3.0 available" in resp.text
-    assert 'href="https://github.com/a000a999a/relocarr/tree/v1.3.0"' in resp.text
+    assert "v1.4.0 available" in resp.text
+    assert 'href="https://github.com/a000a999a/relocarr/tree/v1.4.0"' in resp.text
 
 
 def test_system_page_shows_disk_space_for_configured_paths(client, tmp_path):
@@ -214,6 +215,84 @@ def test_system_page_shows_disk_space_error_from_cache(client, tmp_path):
     resp = client.get("/system")
     assert resp.status_code == 200
     assert "Host is down" in resp.text
+
+
+def test_system_page_shows_a_total_line_summing_distinct_disks(client, tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    app_id = _insert_app(str(staging))
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE apps SET target_root = ? WHERE id = ?", ("", app_id))
+    movie_library_cache.scanned_at = time.time()
+    disk_space_cache.entries[str(staging)] = {
+        "free": 10 * 1024**3,
+        "total": 20 * 1024**3,
+        "dev": 111,
+        "ok": True,
+    }
+
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "20.0 GiB" in resp.text  # total
+    assert "10.0 GiB" in resp.text  # used (total - free)
+
+
+def test_system_page_total_line_does_not_double_count_one_disk_under_two_apps(client, tmp_path):
+    staging_a = tmp_path / "a"
+    staging_b = tmp_path / "b"
+    staging_a.mkdir()
+    staging_b.mkdir()
+    app_a = _insert_app(str(staging_a), name="Radarr")
+    app_b = _insert_app(str(staging_b), name="Sonarr")
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE apps SET target_root = '' WHERE id IN (?, ?)", (app_a, app_b))
+    movie_library_cache.scanned_at = time.time()
+    # Same physical disk (same dev), different subfolders -- exactly what
+    # staging/target sharing one mount looks like in the real cache.
+    disk_space_cache.entries[str(staging_a)] = {
+        "free": 10 * 1024**3,
+        "total": 20 * 1024**3,
+        "dev": 222,
+        "ok": True,
+    }
+    disk_space_cache.entries[str(staging_b)] = {
+        "free": 10 * 1024**3,
+        "total": 20 * 1024**3,
+        "dev": 222,
+        "ok": True,
+    }
+
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "20.0 GiB" in resp.text  # total counted once, not 40
+    assert "40.0 GiB" not in resp.text
+
+
+def test_system_page_shows_used_by_this_folder_from_cache(client, tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    app_id = _insert_app(str(staging))
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE apps SET target_root = ? WHERE id = ?", ("", app_id))
+    movie_library_cache.scanned_at = time.time()
+    folder_usage_cache.entries[str(staging)] = {"used": 3 * 1024**3, "ok": True}
+
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "3.0 GiB" in resp.text
+
+
+def test_system_page_shows_folder_usage_as_not_scanned_yet_before_first_scan(client, tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    app_id = _insert_app(str(staging))
+    with session(app_settings.db_path) as conn:
+        conn.execute("UPDATE apps SET target_root = ? WHERE id = ?", ("", app_id))
+    movie_library_cache.scanned_at = time.time()
+
+    resp = client.get("/system")
+    assert resp.status_code == 200
+    assert "not scanned yet" in resp.text
 
 
 def test_setup_guide_renders(client):

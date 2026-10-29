@@ -917,3 +917,29 @@ practice:
   `download_id` is left `NULL` for these (no reliable way to recover which torrent produced a
   file from Radarr's movie API alone), so they rely on the two tools above as their own fallback
   if a torrent is still sitting around for one of them.
+
+**System page: Disk Space total line + actual folder usage (2026-10-29).** The existing table
+only ever showed each path's whole-filesystem free/total (`disk_health.py`'s `DiskSpaceCache`) —
+four near-duplicate rows when staging/target land on just two physical disks, and no way to tell
+how much of a shared disk any one app's folder specifically accounts for. Two additions:
+
+- *Total line.* A summary row above the per-app table: Total / Used / Free, deduped by
+  filesystem (`st_dev`, captured alongside each `shutil.disk_usage()` call) rather than by path —
+  confirmed live that two apps' staging folders sharing one disk under different subfolders
+  (e.g. `.../relocarr/movies` and `.../relocarr/tv`) report identical free/total from
+  `disk_usage()`, so summing every row naively double-counts that disk. A manually-seeded cache
+  entry missing `dev` (existing tests, an older in-memory snapshot) falls back to deduping by
+  path instead of raising.
+- *Used by this folder.* A new column showing each staging/target folder's own actual content
+  size — a real recursive walk (`compute_folder_usage`), not derived from the mount-level
+  numbers above. Explicitly **not** folded into the existing 60s `DiskSpaceCache` loop: a full
+  walk over the Shield's network-mounted target costs the same order of magnitude as
+  `library.py`'s movie scan, and the user only wants this as a once-a-day figure, not tracked
+  continuously — so it's its own cache (`FolderUsageCache`) and background loop
+  (`run_folder_usage_scan_forever`, `FOLDER_SCAN_INTERVAL_SECONDS = 86400`), same
+  cache-plus-timeout shape as every other wedge-prone scan in this app (`FOLDER_SCAN_TIMEOUT_SECONDS
+  = 300`, generous for a full walk vs. `library.py`'s 60s file-stat-only scan). The System page
+  route stays read-only against both caches, same as before — no live filesystem call on page
+  load either way.
+
+Version bumped 1.2.0 -> 1.3.0. 13 new tests, 346 passing.

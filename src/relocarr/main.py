@@ -9,7 +9,9 @@ from fastapi.staticfiles import StaticFiles
 from .config import settings
 from .db import init_db
 from .disk_health import cache as disk_space_cache
+from .disk_health import folder_usage_cache
 from .disk_health import run_disk_space_check_forever
+from .disk_health import run_folder_usage_scan_forever
 from .jobs.scheduler import run_forever, run_seal_forever
 from .library import cache as movie_library_cache
 from .library import run_library_scan_forever
@@ -87,6 +89,9 @@ async def lifespan(app: FastAPI):
     disk_space_task = asyncio.create_task(
         run_disk_space_check_forever(settings.db_path, disk_space_cache, stop_event)
     )
+    folder_usage_task = asyncio.create_task(
+        run_folder_usage_scan_forever(settings.db_path, folder_usage_cache, stop_event)
+    )
     version_check_task = asyncio.create_task(run_version_check_forever(version_check_cache, stop_event))
     plex_quality_task = asyncio.create_task(
         run_plex_quality_check_forever(settings.db_path, plex_quality_cache, stop_event)
@@ -97,6 +102,7 @@ async def lifespan(app: FastAPI):
     await seal_task
     await library_scan_task
     await disk_space_task
+    await folder_usage_task
     await version_check_task
     await plex_quality_task
 

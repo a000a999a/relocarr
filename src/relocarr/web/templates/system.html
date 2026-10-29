@@ -20,10 +20,29 @@
   {% if disk_checked_at %}Checked {{ disk_checked_at }} (refreshes in the background every 60s --
   never checked live on page load, so a dead mount can't hang this page).
   {% else %}Checking for the first time -- figures below will appear shortly.{% endif %}
+  {% if folder_checked_at %}"Used by this folder" below last scanned {{ folder_checked_at }}
+  (refreshes once a day -- a full folder walk, not a cheap mount-level check).
+  {% else %}"Used by this folder" scans once a day -- the first figures will appear after the
+  initial scan completes.{% endif %}
 </p>
+{% if disk_total %}
+<table style="margin-bottom: 12px;">
+  <tr><th>Total</th><th>Used</th><th>Free</th><th style="width: 160px;"></th></tr>
+  <tr>
+    <td>{{ (disk_total.total / (1024**3)) | round(1) }} GiB</td>
+    <td>{{ (disk_total.used / (1024**3)) | round(1) }} GiB</td>
+    <td>{{ (disk_total.free / (1024**3)) | round(1) }} GiB</td>
+    <td>
+      <div style="background: var(--bg-input); border-radius: 3px; height: 10px; overflow: hidden;">
+        <div style="background: var(--accent); height: 100%; width: {{ (disk_total.used / disk_total.total * 100) | round(0) }}%;"></div>
+      </div>
+    </td>
+  </tr>
+</table>
+{% endif %}
 {% if disk_space %}
 <table>
-  <tr><th>Location</th><th>Path</th><th>Free</th><th>Total</th><th style="width: 160px;"></th></tr>
+  <tr><th>Location</th><th>Path</th><th>Free</th><th>Total</th><th style="width: 160px;"></th><th>Used by this folder</th></tr>
   {% for d in disk_space %}
   <tr>
     <td>{{ d.label }}</td>
@@ -40,6 +59,11 @@
     <td colspan="3" style="color: var(--text-dim);">not checked yet</td>
     {% else %}
     <td colspan="3" style="color: var(--btn-danger);">{{ d.error }}</td>
+    {% endif %}
+    {% if d.folder_used is not none %}
+    <td>{{ (d.folder_used / (1024**3)) | round(1) }} GiB</td>
+    {% else %}
+    <td style="color: var(--text-dim);">not scanned yet</td>
     {% endif %}
   </tr>
   {% endfor %}
