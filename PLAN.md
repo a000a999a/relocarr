@@ -665,6 +665,20 @@ downloads so hardlinks work), destination on the network share.
 
 ## 18. Open questions
 
+* No authentication on the web UI (added 2026-10-29). Settings -> Plex and each App Detail
+  page render their secrets (Plex token, Radarr/Sonarr API keys) as plain `type="text"`
+  inputs with the real value pre-filled, and there is no login gating any page at all --
+  "UI login" in §9's Settings table was only ever a line item, never implemented. Combined
+  with `docker-compose.yml` publishing 8686 on `0.0.0.0` (not localhost-only), anyone who can
+  reach the host on the LAN can open those pages and read the secrets directly from the page
+  source, masked input or not. Deliberately left as-is: matches the existing household trust
+  model -- Radarr/Sonarr on this same host both have Forms-based login available but configured
+  `AuthenticationRequired: DisabledForLocalAddresses`, i.e. no login prompt for anyone on the
+  LAN either, only for external access. If this is ever revisited, two separable pieces: (1)
+  cheap -- mask the three secret inputs as `type="password"` with a show-toggle, purely
+  cosmetic, doesn't stop anyone who can already load the page; (2) real fix -- a single-user
+  login (session cookie) gating every page, matching Radarr/Sonarr's own Forms auth.
+
 * Ship a `docker-compose` "full demo" stack (Radarr + Sonarr + Transmission + relocarr, all
   preconfigured) for contributors, on top of the basic single-service compose file that now
   ships in §17?
